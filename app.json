@@ -4,13 +4,15 @@
     "slug": "reidentify-frontend",
     "version": "1.0.0",
     "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#101214",
     "icon": "./assets/images/icon.png",
     "scheme": "reidentifyfrontend",
-    "userInterfaceStyle": "automatic",
     "ios": {
       "icon": "./assets/expo.icon"
     },
     "android": {
+      "backgroundColor": "#101214",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -21,6 +23,8 @@
     },
     "web": {
       "output": "static",
+      "backgroundColor": "#101214",
+      "themeColor": "#101214",
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
@@ -28,7 +32,7 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#208AEF",
+          "backgroundColor": "#101214",
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 76
         }

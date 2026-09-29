@@ -1,18 +1,31 @@
-import { DarkTheme, DefaultTheme, ThemeProvider } from 'expo-router';
-import * as SplashScreen from 'expo-splash-screen';
-import { useColorScheme } from 'react-native';
+import { Stack } from "expo-router";
+import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
+import { colors } from "../constants/app-colors";
 
-import { AnimatedSplashOverlay } from '@/components/animated-icon';
-import AppTabs from '@/components/app-tabs';
-
-SplashScreen.preventAutoHideAsync();
-
-export default function TabLayout() {
-  const colorScheme = useColorScheme();
+export default function RootLayout() {
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <AnimatedSplashOverlay />
-      <AppTabs />
-    </ThemeProvider>
+    <SafeAreaProvider>
+      <SafeAreaView
+        edges={["top"]}
+        style={{ flex: 1, backgroundColor: colors.background }}
+      >
+        <Stack
+          screenOptions={{
+            contentStyle: { backgroundColor: colors.background },
+            headerStyle: { backgroundColor: colors.background },
+            headerTintColor: colors.text,
+            headerTitleStyle: { color: colors.text },
+            headerShadowVisible: false,
+          }}
+        >
+          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+          <Stack.Screen name="index" options={{ headerShown: false }} />
+          <Stack.Screen
+            name="conversation/[id]"
+            options={{ title: "Conversation" }}
+          />
+        </Stack>
+      </SafeAreaView>
+    </SafeAreaProvider>
   );
 }
