@@ -1,20 +1,9 @@
 import { Tabs } from "expo-router";
 import { SymbolView } from "expo-symbols";
 
-import {
-  ThemeProvider,
-  useAppTheme,
-} from "../../context/theme-context";
+import { useAppTheme } from "../../context/theme-context";
 
 export default function TabLayout() {
-  return (
-    <ThemeProvider>
-      <ThemedTabs />
-    </ThemeProvider>
-  );
-}
-
-function ThemedTabs() {
   const { colors } = useAppTheme();
 
   return (

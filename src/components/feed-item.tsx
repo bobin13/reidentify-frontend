@@ -1,5 +1,8 @@
+import { useMemo } from "react";
 import { StyleSheet, Text, View } from "react-native";
-import { colors } from "../constants/app-colors";
+
+import type { AppColors } from "../constants/app-colors";
+import { useAppTheme } from "../context/theme-context";
 
 type FeedItemProps = {
   authorName: string;
@@ -18,6 +21,9 @@ export function FeedItem({
   likes,
   comments,
 }: FeedItemProps) {
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
   const initials = authorName
     .split(" ")
     .map((part) => part[0])
@@ -31,12 +37,14 @@ export function FeedItem({
         <View style={styles.avatar}>
           <Text style={styles.initials}>{initials}</Text>
         </View>
+
         <View style={styles.authorDetails}>
           <Text style={styles.authorName}>{authorName}</Text>
           <Text style={styles.metadata}>
             {handle} · {timestamp}
           </Text>
         </View>
+
         <Text style={styles.more}>...</Text>
       </View>
 
@@ -50,66 +58,68 @@ export function FeedItem({
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    padding: 16,
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderWidth: 1,
-    borderRadius: 8,
-    gap: 16,
-  },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-  },
-  avatar: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: colors.accent,
-  },
-  initials: {
-    color: colors.background,
-    fontSize: 13,
-    fontWeight: "700",
-  },
-  authorDetails: {
-    flex: 1,
-    gap: 3,
-  },
-  authorName: {
-    color: colors.text,
-    fontSize: 15,
-    fontWeight: "700",
-  },
-  metadata: {
-    color: colors.muted,
-    fontSize: 12,
-  },
-  more: {
-    color: colors.muted,
-    fontSize: 18,
-    fontWeight: "700",
-  },
-  content: {
-    color: colors.text,
-    fontSize: 15,
-    lineHeight: 23,
-  },
-  footer: {
-    flexDirection: "row",
-    gap: 24,
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-  },
-  engagement: {
-    color: colors.muted,
-    fontSize: 13,
-    fontWeight: "600",
-  },
-});
+function createStyles(colors: AppColors) {
+  return StyleSheet.create({
+    container: {
+      padding: 16,
+      backgroundColor: colors.surface,
+      borderColor: colors.border,
+      borderWidth: 1,
+      borderRadius: 8,
+      gap: 16,
+    },
+    header: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 12,
+    },
+    avatar: {
+      width: 42,
+      height: 42,
+      borderRadius: 21,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: colors.accent,
+    },
+    initials: {
+      color: colors.background,
+      fontSize: 13,
+      fontWeight: "700",
+    },
+    authorDetails: {
+      flex: 1,
+      gap: 3,
+    },
+    authorName: {
+      color: colors.text,
+      fontSize: 15,
+      fontWeight: "700",
+    },
+    metadata: {
+      color: colors.muted,
+      fontSize: 12,
+    },
+    more: {
+      color: colors.muted,
+      fontSize: 18,
+      fontWeight: "700",
+    },
+    content: {
+      color: colors.text,
+      fontSize: 15,
+      lineHeight: 23,
+    },
+    footer: {
+      flexDirection: "row",
+      gap: 24,
+      paddingTop: 12,
+      borderTopWidth: 1,
+      borderTopColor: colors.border,
+    },
+    engagement: {
+      color: colors.muted,
+      fontSize: 13,
+      fontWeight: "600",
+    },
+  });
+}
