@@ -1,8 +1,22 @@
 import { Tabs } from "expo-router";
 import { SymbolView } from "expo-symbols";
-import { colors } from "../../constants/app-colors";
+
+import {
+  ThemeProvider,
+  useAppTheme,
+} from "../../context/theme-context";
 
 export default function TabLayout() {
+  return (
+    <ThemeProvider>
+      <ThemedTabs />
+    </ThemeProvider>
+  );
+}
+
+function ThemedTabs() {
+  const { colors } = useAppTheme();
+
   return (
     <Tabs
       initialRouteName="feed"
@@ -42,6 +56,26 @@ export default function TabLayout() {
           ),
         }}
       />
+
+      <Tabs.Screen
+        name="home"
+        options={{
+          title: "Home",
+          tabBarIcon: ({ color, focused }) => (
+            <SymbolView
+              name={{
+                ios: focused ? "house.fill" : "house",
+                android: "home",
+                web: "home",
+              }}
+              size={22}
+              tintColor={color}
+              weight={focused ? "semibold" : "regular"}
+            />
+          ),
+        }}
+      />
+
       <Tabs.Screen
         name="search"
         options={{
@@ -59,6 +93,25 @@ export default function TabLayout() {
           ),
         }}
       />
+
+      <Tabs.Screen
+        name="map"
+        options={{
+          title: "Map",
+          tabBarIcon: ({ color }) => (
+            <SymbolView
+              name={{
+                ios: "map.fill",
+                android: "map",
+                web: "map",
+              }}
+              size={22}
+              tintColor={color}
+            />
+          ),
+        }}
+      />
+
       <Tabs.Screen
         name="messages"
         options={{
@@ -76,6 +129,7 @@ export default function TabLayout() {
           ),
         }}
       />
+
       <Tabs.Screen
         name="profile"
         options={{
