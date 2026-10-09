@@ -15,7 +15,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import type { AppColors } from "../constants/app-colors";
-import { DEMO_CREDENTIALS, useAuth } from "../context/auth-context";
+import { useAuth } from "../context/auth-context";
 import { useAppTheme } from "../context/theme-context";
 import {
   validateAuthForm,
@@ -192,17 +192,7 @@ export function AuthScreen({
     }
   }
 
-  function fillDemoAccount() {
-    setFields({
-      fullName: "",
-      email: DEMO_CREDENTIALS.email,
-      password: DEMO_CREDENTIALS.password,
-      confirmPassword: "",
-    });
-    setErrors({});
-    setFormError("");
-    emailInput.current?.focus();
-  }
+
 
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
@@ -358,22 +348,6 @@ export function AuthScreen({
                 </Text>
               )}
             </Pressable>
-
-            {!isRegister && (
-              <Pressable
-                accessibilityRole="button"
-                disabled={submitting}
-                onPress={fillDemoAccount}
-                style={({ pressed }) => [
-                  styles.secondaryButton,
-                  pressed && styles.pressed,
-                ]}
-              >
-                <Text style={styles.secondaryButtonText}>
-                  Fill demo account
-                </Text>
-              </Pressable>
-            )}
           </View>
 
           <View style={styles.switchRow}>
@@ -391,10 +365,6 @@ export function AuthScreen({
               </Text>
             </Pressable>
           </View>
-
-          <Text style={styles.previewNote}>
-            Demo mode · accounts reset when the app restarts.
-          </Text>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>

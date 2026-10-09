@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import { router, useFocusEffect } from "expo-router";
+import { ActivityIndicator } from "react-native";
 import {
   Alert,
   BackHandler,
@@ -28,7 +29,13 @@ type Page = "overview" | "login" | "register" | "edit";
 
 export default function ProfileScreen() {
   const { colors, theme, toggleTheme } = useAppTheme();
-  const { user, signOut } = useAuth();
+const {
+  user,
+  signOut,
+  loading,
+  authError,
+  refreshProfile,
+} = useAuth();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [page, setPage] = useState<Page>("overview");
 
@@ -45,7 +52,27 @@ export default function ProfileScreen() {
       return () => subscription.remove();
     }, [page]),
   );
-
+if (page === "overview" && loading) {
+  return (
+    <View
+      style={{
+        flex: 1,
+        justifyContent: "center",
+        alignItems: "center",
+        gap: 12,
+        backgroundColor: colors.background,
+      }}
+    >
+      <ActivityIndicator
+        size="large"
+        color={colors.accent}
+      />
+      <Text style={{ color: colors.text }}>
+        Loading your profile…
+      </Text>
+    </View>
+  );
+}
   if (page === "login" || page === "register") {
     return (
       <AuthScreen
@@ -75,6 +102,27 @@ export default function ProfileScreen() {
           </View>
           <Text style={styles.brandText}>ReIdentify</Text>
         </View>
+
+        {authError !== "" && (
+          <View style={styles.section}>
+            <Text
+              accessibilityRole="alert"
+              style={{ color: colors.text, fontSize: 16 }}
+            >
+              {authError}
+            </Text>
+
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => void refreshProfile()}
+              style={styles.outlineButton}
+            >
+              <Text style={styles.outlineButtonText}>
+                Try again
+              </Text>
+            </Pressable>
+          </View>
+        )}
 
         {user ? (
           <>
@@ -279,8 +327,8 @@ export default function ProfileScreen() {
               title="Privacy"
               onPress={() =>
                 Alert.alert(
-                  "Privacy in this preview",
-                  "Profiles and accounts stay in memory on this device and reset when the app restarts. Your profile is not sent to a server.",
+                  "Privacy",
+                  "Your profile is saved in ReIdentify's database. You can use a general neighbourhood or city for your location."
                 )
               }
             />
@@ -289,7 +337,7 @@ export default function ProfileScreen() {
               onPress={() =>
                 Alert.alert(
                   "Getting started",
-                  "Create an account to try your own profile, or select Sign in and Fill demo account to explore Margaret's profile. You can edit your neighbourhood and interests from Edit profile.",
+                  "Create an account or sign in. Use Edit profile to change your name, neighbourhood and interests."
                 )
               }
               last
@@ -300,9 +348,14 @@ export default function ProfileScreen() {
         {user && (
           <Pressable
             accessibilityRole="button"
-            onPress={() => {
-              signOut();
-              setPage("overview");
+            onPress={async () => {
+              const result = await signOut();
+
+              if (result.ok) {
+                setPage("overview");
+              } else {
+                Alert.alert("Sign out", result.message);
+              }
             }}
             style={({ pressed }) => [
               styles.signOutButton,
@@ -312,10 +365,6 @@ export default function ProfileScreen() {
             <Text style={styles.signOutText}>Sign out</Text>
           </Pressable>
         )}
-
-        <Text style={styles.previewNote}>
-          Demo mode · accounts reset when the app restarts.
-        </Text>
       </ScrollView>
     </SafeAreaView>
   );
@@ -378,11 +427,21 @@ function EditProfile({
     );
   }
 
-  function save() {
-    const result = updateProfile({ fullName, area, interests });
-    if (result.ok) onClose();
-    else setError(result.message);
+async function save() {
+  setError("");
+
+  const result = await updateProfile({
+    fullName,
+    area,
+    interests,
+  });
+
+  if (result.ok) {
+    onClose();
+  } else {
+    setError(result.message);
   }
+}
 
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>

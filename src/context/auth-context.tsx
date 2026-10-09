@@ -1,10 +1,23 @@
 import {
   createContext,
   useContext,
+  useEffect,
   useRef,
   useState,
   type ReactNode,
 } from "react";
+
+import {
+  createUserWithEmailAndPassword,
+  onAuthStateChanged,
+  signInWithEmailAndPassword,
+  signOut as firebaseSignOut,
+  updateProfile as updateFirebaseProfile,
+  type User,
+} from "firebase/auth";
+
+import { auth } from "../lib/firebase";
+import { ApiError, apiRequest } from "../lib/api";
 
 import {
   normalizeEmail,
@@ -28,54 +41,270 @@ export type AppUser = {
   joinedAt: string;
 };
 
+// Keep existing imports compatible.
+// These values do not create or authenticate a demo account.
+export const DEMO_USER_ID = "demo-margaret";
+
 export const DEMO_CREDENTIALS = {
   email: "margaret@example.com",
   password: "ReIdentify123",
 } as const;
 
-export const DEMO_USER_ID = "demo-margaret";
+type AuthResult =
+  | { ok: true }
+  | { ok: false; message: string };
 
-type AuthResult = { ok: true } | { ok: false; message: string };
-
-type ProfileInput = Pick<AppUser, "fullName" | "area" | "interests">;
+type ProfileInput = Pick<
+  AppUser,
+  "fullName" | "area" | "interests"
+>;
 
 type AuthContextValue = {
   user: AppUser | null;
-  signIn: (email: string, password: string) => Promise<AuthResult>;
+  loading: boolean;
+  authError: string;
+  signIn: (
+    email: string,
+    password: string
+  ) => Promise<AuthResult>;
   register: (fields: AuthFields) => Promise<AuthResult>;
-  signOut: () => void;
-  updateProfile: (input: ProfileInput) => AuthResult;
+  signOut: () => Promise<AuthResult>;
+  updateProfile: (
+    input: ProfileInput
+  ) => Promise<AuthResult>;
+  refreshProfile: () => Promise<AuthResult>;
 };
 
-type DemoAccount = { user: AppUser; password: string };
+const AuthContext = createContext<
+  AuthContextValue | undefined
+>(undefined);
 
-const AuthContext = createContext<AuthContextValue | undefined>(undefined);
+function errorMessage(error: unknown): string {
+  const code = (error as { code?: string })?.code;
 
-function createDemoAccount(): DemoAccount {
-  return {
-    user: {
-      id: DEMO_USER_ID,
-      fullName: "Margaret Hughes",
-      email: DEMO_CREDENTIALS.email,
-      area: "Etobicoke, Toronto",
-      interests: ["Walking & outdoors", "Learning & books"],
-      joinedAt: new Date(2026, 5, 1).toISOString(),
-    },
-    password: DEMO_CREDENTIALS.password,
-  };
+  switch (code) {
+    case "auth/invalid-credential":
+    case "auth/wrong-password":
+    case "auth/user-not-found":
+    case "auth/invalid-login-credentials":
+      return "Your email or password is incorrect.";
+
+    case "auth/email-already-in-use":
+      return "This email already has an account. Please sign in.";
+
+    case "auth/invalid-email":
+      return "Please enter a valid email address.";
+
+    case "auth/weak-password":
+      return "Please choose a stronger password.";
+
+    case "auth/too-many-requests":
+      return "Too many attempts. Please wait and try again.";
+
+    case "auth/network-request-failed":
+      return "Cannot sign in. Check your internet connection.";
+
+    case "auth/user-disabled":
+      return "This account has been disabled.";
+
+    case "auth/operation-not-allowed":
+      return "Sign in is unavailable right now.";
+
+    default:
+      if (code) {
+        return "We could not continue. Please try again.";
+      }
+
+      return error instanceof Error
+        ? error.message
+        : "Something went wrong. Try again.";
+  }
 }
 
-/**
- * Frontend preview only. Accounts and the session live in memory and reset
- * when the app restarts. No passwords or account records are written to storage.
- * Replace the method bodies with Firebase/Node integration in the backend phase.
- */
-export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<AppUser | null>(null);
-  const accounts = useRef<DemoAccount[]>([createDemoAccount()]);
-  const nextUserId = useRef(1);
+async function saveProfile(
+  account: User,
+  input: ProfileInput
+): Promise<AppUser> {
+  const result = await apiRequest<{ user: AppUser }>(
+    account,
+    "PUT",
+    input
+  );
 
-  async function signIn(email: string, password: string): Promise<AuthResult> {
+  return result.user;
+}
+
+async function loadProfile(
+  account: User
+): Promise<AppUser> {
+  try {
+    const result = await apiRequest<{ user: AppUser }>(
+      account,
+      "GET"
+    );
+
+    return result.user;
+  } catch (error) {
+    if (
+      !(error instanceof ApiError) ||
+      error.status !== 404
+    ) {
+      throw error;
+    }
+
+    // Recover an interrupted signup where only the
+    // Firebase account was created.
+    const name = account.displayName?.trim();
+
+    return saveProfile(account, {
+      fullName:
+        name && name.length >= 2 ? name : "New member",
+      area: "",
+      interests: [],
+    });
+  }
+}
+
+export function AuthProvider({
+  children,
+}: {
+  children: ReactNode;
+}) {
+  const [user, setUser] = useState<AppUser | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState("");
+
+  const pending = useRef(false);
+  const version = useRef(0);
+  const mounted = useRef(false);
+
+  useEffect(() => {
+    mounted.current = true;
+
+    const unsubscribe = onAuthStateChanged(
+      auth,
+      (account) => {
+        if (pending.current) return;
+
+        const requestVersion = ++version.current;
+
+        setUser(null);
+        setAuthError("");
+        setLoading(true);
+
+        void (async () => {
+          try {
+            const profile = account
+              ? await loadProfile(account)
+              : null;
+
+            if (
+              mounted.current &&
+              version.current === requestVersion
+            ) {
+              setUser(profile);
+            }
+          } catch (error) {
+            if (
+              mounted.current &&
+              version.current === requestVersion
+            ) {
+              setAuthError(errorMessage(error));
+            }
+          } finally {
+            if (
+              mounted.current &&
+              version.current === requestVersion
+            ) {
+              setLoading(false);
+            }
+          }
+        })();
+      }
+    );
+
+    return () => {
+      mounted.current = false;
+      ++version.current;
+      unsubscribe();
+    };
+  }, []);
+
+  async function runAction(
+    action: () => Promise<AppUser | null>
+  ): Promise<AuthResult> {
+    if (pending.current) {
+      return {
+        ok: false,
+        message: "Please wait for the current request.",
+      };
+    }
+
+    pending.current = true;
+    const requestVersion = ++version.current;
+
+    setAuthError("");
+    setLoading(true);
+
+    try {
+      await auth.authStateReady();
+
+      const profile = await action();
+
+      if (
+        profile &&
+        auth.currentUser?.uid !== profile.id
+      ) {
+        throw new Error(
+          "Your login changed. Please try again."
+        );
+      }
+
+      if (
+        !mounted.current ||
+        version.current !== requestVersion
+      ) {
+        return {
+          ok: false,
+          message: "Please try again.",
+        };
+      }
+
+      setUser(profile);
+      return { ok: true };
+    } catch (error) {
+      const message = errorMessage(error);
+
+      if (
+        mounted.current &&
+        version.current === requestVersion
+      ) {
+        setAuthError(message);
+
+        setUser((current) =>
+          current?.id === auth.currentUser?.uid
+            ? current
+            : null
+        );
+      }
+
+      return { ok: false, message };
+    } finally {
+      pending.current = false;
+
+      if (
+        mounted.current &&
+        version.current === requestVersion
+      ) {
+        setLoading(false);
+      }
+    }
+  }
+
+  async function signIn(
+    email: string,
+    password: string
+  ): Promise<AuthResult> {
     const errors = validateAuthForm("login", {
       fullName: "",
       email,
@@ -83,81 +312,112 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       confirmPassword: "",
     });
 
-    if (Object.keys(errors).length > 0) {
-      return { ok: false, message: Object.values(errors)[0]! };
-    }
+    const message = Object.values(errors)[0];
 
-    const account = accounts.current.find(
-      (entry) =>
-        entry.user.email === normalizeEmail(email) &&
-        entry.password === password,
-    );
+    if (message) return { ok: false, message };
 
-    if (!account) {
-      return { ok: false, message: "Your email or password is incorrect." };
-    }
+    return runAction(async () => {
+      const result = await signInWithEmailAndPassword(
+        auth,
+        normalizeEmail(email),
+        password
+      );
 
-    setUser({ ...account.user, interests: [...account.user.interests] });
-    return { ok: true };
+      return loadProfile(result.user);
+    });
   }
 
-  async function register(fields: AuthFields): Promise<AuthResult> {
+  async function register(
+    fields: AuthFields
+  ): Promise<AuthResult> {
     const errors = validateAuthForm("register", fields);
-    if (Object.keys(errors).length > 0) {
-      return { ok: false, message: Object.values(errors)[0]! };
-    }
+    const message = Object.values(errors)[0];
 
-    const email = normalizeEmail(fields.email);
-    if (accounts.current.some((entry) => entry.user.email === email)) {
+    if (message) return { ok: false, message };
+
+    if (fields.fullName.trim().length > 80) {
       return {
         ok: false,
-        message: "This email already has an account. Please sign in.",
+        message: "Use a name with 80 characters or fewer.",
       };
     }
 
-    const newUser: AppUser = {
-      id: `preview-user-${nextUserId.current++}`,
-      fullName: fields.fullName.trim(),
-      email,
-      area: "",
-      interests: [],
-      joinedAt: new Date().toISOString(),
-    };
+    return runAction(async () => {
+      let accountCreated = false;
 
-    accounts.current.push({ user: newUser, password: fields.password });
-    setUser({ ...newUser, interests: [] });
-    return { ok: true };
+      try {
+        const result =
+          await createUserWithEmailAndPassword(
+            auth,
+            normalizeEmail(fields.email),
+            fields.password
+          );
+
+        accountCreated = true;
+
+        await updateFirebaseProfile(result.user, {
+          displayName: fields.fullName.trim(),
+        });
+
+        return await saveProfile(result.user, {
+          fullName: fields.fullName.trim(),
+          area: "",
+          interests: [],
+        });
+      } catch (error) {
+        if (accountCreated) {
+          throw new Error(
+            `Your account was created, but profile setup could not finish. ${errorMessage(error)} Choose Sign in or Try again to finish setup.`
+          );
+        }
+
+        throw error;
+      }
+    });
   }
 
-  function signOut() {
-    setUser(null);
+  async function signOut(): Promise<AuthResult> {
+    return runAction(async () => {
+      await firebaseSignOut(auth);
+      return null;
+    });
   }
 
-  function updateProfile(input: ProfileInput): AuthResult {
-    if (!user) {
-      return { ok: false, message: "Please sign in to edit your profile." };
-    }
-    if (input.fullName.trim().length < 2) {
-      return { ok: false, message: "Please enter your name." };
-    }
+  async function updateProfile(
+    input: ProfileInput
+  ): Promise<AuthResult> {
+    return runAction(async () => {
+      const account = auth.currentUser;
 
-    const updatedUser: AppUser = {
-      ...user,
-      fullName: input.fullName.trim(),
-      area: input.area.trim(),
-      interests: [...input.interests],
-    };
+      if (!account) {
+        throw new Error(
+          "Please sign in to edit your profile."
+        );
+      }
 
-    accounts.current = accounts.current.map((account) =>
-      account.user.id === user.id ? { ...account, user: updatedUser } : account,
-    );
-    setUser(updatedUser);
-    return { ok: true };
+      return saveProfile(account, input);
+    });
+  }
+
+  async function refreshProfile(): Promise<AuthResult> {
+    return runAction(async () => {
+      const account = auth.currentUser;
+      return account ? loadProfile(account) : null;
+    });
   }
 
   return (
     <AuthContext.Provider
-      value={{ user, signIn, register, signOut, updateProfile }}
+      value={{
+        user,
+        loading,
+        authError,
+        signIn,
+        register,
+        signOut,
+        updateProfile,
+        refreshProfile,
+      }}
     >
       {children}
     </AuthContext.Provider>
@@ -166,8 +426,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 export function useAuth() {
   const context = useContext(AuthContext);
+
   if (!context) {
-    throw new Error("useAuth must be used inside AuthProvider");
+    throw new Error(
+      "useAuth must be used inside AuthProvider"
+    );
   }
+
   return context;
 }
