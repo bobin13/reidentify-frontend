@@ -1,5 +1,5 @@
 require("dotenv").config();
-
+const { installMessagingRoutes } = require("./messages-routes");
 const express = require("express");
 const { existsSync } = require("node:fs");
 const {
@@ -171,6 +171,8 @@ function createApp({ db, firebaseAuth }) {
 
     res.json({ user });
   });
+
+  installMessagingRoutes(app, db);
 
   app.use((_req, res) => {
     res.status(404).json({

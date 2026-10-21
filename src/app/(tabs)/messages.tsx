@@ -1,8 +1,8 @@
-
-import { useCallback, useMemo, useState } from "react";
-import { useFocusEffect } from "expo-router";
+import { useCallback, useMemo, useRef, useState } from "react";
+import { router, useFocusEffect } from "expo-router";
 import {
-  Alert,
+  ActivityIndicator,
+  AppState,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -10,242 +10,385 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { SymbolView } from "expo-symbols";
 
 import { MessageItem } from "../../components/message-item";
 import type { AppColors } from "../../constants/app-colors";
+import { useAuth } from "../../context/auth-context";
 import { useAppTheme } from "../../context/theme-context";
+import { auth } from "../../lib/firebase";
 import {
-  getConversations,
-  type StoredConversation,
-} from "../../data/conversation-storage";
-import { sampleConversations } from "../../data/sample-conversations";
+  getChats,
+  getMembers,
+  messageError,
+  startChat,
+  timeLabel,
+  type Chat,
+  type Member,
+} from "../../lib/messaging";
 
 export default function MessagesScreen() {
-  const [searchText, setSearchText] = useState("");
-  const [unreadOnly, setUnreadOnly] = useState(false);
-  const [conversations, setConversations] =
-    useState<StoredConversation[]>(sampleConversations);
-
+  const { user, loading: authLoading } = useAuth();
+  const uid = user?.id || "";
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
-  // Refresh whenever you return from a chat.
+  const [peopleMode, setPeopleMode] = useState(false);
+  const [query, setQuery] = useState("");
+  const [unreadOnly, setUnreadOnly] = useState(false);
+
+  const [result, setResult] = useState<{
+    owner: string;
+    chats: Chat[];
+    people: Member[];
+  }>({
+    owner: "",
+    chats: [],
+    people: [],
+  });
+
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [opening, setOpening] = useState("");
+
+  const pending = useRef(false);
+  const identity = useRef(uid);
+  identity.current = uid;
+
   useFocusEffect(
     useCallback(() => {
+      if (!uid) return;
+
       let active = true;
+      let busy = false;
 
-      async function loadMessages() {
+      setError("");
+      setLoading(true);
+
+      async function refresh() {
+        if (
+          !active ||
+          busy ||
+          (AppState.currentState && AppState.currentState !== "active")
+        ) {
+          return;
+        }
+
+        busy = true;
+
         try {
-          const saved = await getConversations();
+          if (peopleMode) {
+            const data = await getMembers(uid);
 
-          if (active) {
-            setConversations(
-              [...saved].sort(
-                (a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0),
-              ),
-            );
+            if (active && auth.currentUser?.uid === uid) {
+              setResult((old) => ({
+                owner: uid,
+                chats: old.owner === uid ? old.chats : [],
+                people: data.people,
+              }));
+            }
+          } else {
+            const data = await getChats(uid);
+
+            if (active && auth.currentUser?.uid === uid) {
+              setResult((old) => ({
+                owner: uid,
+                chats: data.conversations,
+                people: old.owner === uid ? old.people : [],
+              }));
+            }
           }
-        } catch {
-          if (active) {
-            Alert.alert(
-              "Messages",
-              "Could not load saved conversations.",
-            );
+
+          if (active && auth.currentUser?.uid === uid) {
+            setError("");
           }
+        } catch (failure) {
+          if (active) setError(messageError(failure));
+        } finally {
+          if (active) setLoading(false);
+          busy = false;
         }
       }
 
-      loadMessages();
+      void refresh();
+
+      const timer = setInterval(() => void refresh(), 10000);
+      const subscription = AppState.addEventListener("change", (state) => {
+        if (state === "active") void refresh();
+      });
 
       return () => {
         active = false;
+        clearInterval(timer);
+        subscription.remove();
       };
-    }, []),
+    }, [uid, peopleMode]),
   );
 
-  const unreadTotal = conversations.reduce(
-    (total, conversation) => total + conversation.unreadCount,
-    0,
-  );
+  async function openChat(peerId: string) {
+    if (pending.current || !uid) return;
 
-  const filteredConversations = useMemo(() => {
-    const query = searchText.trim().toLowerCase();
+    pending.current = true;
+    setOpening(peerId);
+    setError("");
 
-    return conversations.filter((conversation) => {
-      if (unreadOnly && conversation.unreadCount === 0) {
-        return false;
+    try {
+      const data = await startChat(uid, peerId);
+
+      if (
+        identity.current === uid &&
+        auth.currentUser?.uid === uid
+      ) {
+        router.push({
+          pathname: "/conversation/[id]",
+          params: { id: data.conversation.id },
+        });
       }
+    } catch (failure) {
+      if (identity.current === uid) {
+        setError(messageError(failure));
+      }
+    } finally {
+      pending.current = false;
+      setOpening("");
+    }
+  }
 
-      return JSON.stringify(conversation)
+  const chats = result.owner === uid ? result.chats : [];
+  const people = result.owner === uid ? result.people : [];
+  const search = query.trim().toLowerCase();
+
+  const filteredChats = chats.filter(
+    (chat) =>
+      (!unreadOnly || chat.unreadCount > 0) &&
+      `${chat.name} ${chat.handle} ${chat.preview}`
         .toLowerCase()
-        .includes(query);
-    });
-  }, [conversations, searchText, unreadOnly]);
+        .includes(search),
+  );
+
+  const filteredPeople = people.filter((person) =>
+    `${person.name} ${person.area}`.toLowerCase().includes(search),
+  );
+
+  if (authLoading && !user) {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator color={colors.accent} />
+      </View>
+    );
+  }
+
+  if (!user) {
+    return (
+      <View style={styles.center}>
+        <Text style={styles.title}>Messages</Text>
+        <Text style={styles.subtitle}>
+          Sign in to chat with your community.
+        </Text>
+        <Pressable
+          style={styles.button}
+          onPress={() => router.push("/profile")}
+        >
+          <Text style={styles.buttonText}>Go to profile</Text>
+        </Pressable>
+      </View>
+    );
+  }
 
   return (
     <ScrollView
       style={styles.container}
       contentContainerStyle={styles.content}
-      showsVerticalScrollIndicator={false}
       keyboardShouldPersistTaps="handled"
     >
-      <View style={styles.headingRow}>
-        <View style={styles.heading}>
-          <Text style={styles.title}>Messages</Text>
-          <Text style={styles.subtitle}>
-            Your recent conversations
-          </Text>
-        </View>
+      <View style={styles.heading}>
+        <Text style={styles.title}>
+          {peopleMode ? "New message" : "Messages"}
+        </Text>
 
         <Pressable
-          style={styles.notificationButton}
-          onPress={() => setUnreadOnly((current) => !current)}
           accessibilityRole="button"
-          accessibilityLabel={
-            unreadOnly
-              ? "Show all conversations"
-              : "Show unread conversations"
-          }
+          style={styles.button}
+          onPress={() => {
+            setPeopleMode(!peopleMode);
+            setQuery("");
+          }}
         >
-          <SymbolView
-            name={{
-              ios: "bell",
-              android: "notifications",
-              web: "notifications",
-            }}
-            size={25}
-            tintColor={unreadOnly ? colors.accent : colors.text}
-          />
-
-          {unreadTotal > 0 && (
-            <View style={styles.notificationBadge}>
-              <Text style={styles.notificationBadgeText}>
-                {unreadTotal > 99 ? "99+" : unreadTotal}
-              </Text>
-            </View>
-          )}
+          <Text style={styles.buttonText}>
+            {peopleMode ? "Back" : "New message"}
+          </Text>
         </Pressable>
       </View>
 
-      <View style={styles.searchBar}>
-        <SymbolView
-          name={{
-            ios: "magnifyingglass",
-            android: "search",
-            web: "search",
-          }}
-          size={21}
-          tintColor={colors.muted}
-        />
+      <Text style={styles.subtitle}>
+        {peopleMode
+          ? "Choose a member to chat with"
+          : "Your conversations"}
+      </Text>
 
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Search messages"
-          placeholderTextColor={colors.muted}
-          value={searchText}
-          onChangeText={setSearchText}
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
-      </View>
+      <TextInput
+        accessibilityLabel={
+          peopleMode ? "Search members" : "Search conversations"
+        }
+        style={styles.input}
+        placeholder={
+          peopleMode ? "Search names or areas" : "Search messages"
+        }
+        placeholderTextColor={colors.muted}
+        value={query}
+        onChangeText={setQuery}
+        autoCapitalize="none"
+        autoCorrect={false}
+      />
 
-      <View style={styles.conversationList}>
-        {filteredConversations.map((conversation) => (
-          <MessageItem
-            key={conversation.id}
-            conversation={conversation}
-          />
-        ))}
+      {!peopleMode && (
+        <View style={styles.filters}>
+          {[false, true].map((value) => (
+            <Pressable
+              key={String(value)}
+              accessibilityRole="button"
+              accessibilityState={{ selected: unreadOnly === value }}
+              style={[
+                styles.filter,
+                unreadOnly === value && { borderColor: colors.accent },
+              ]}
+              onPress={() => setUnreadOnly(value)}
+            >
+              <Text style={styles.body}>
+                {value ? "Unread" : "All"}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+      )}
 
-        {filteredConversations.length === 0 && (
-          <Text style={styles.noResults}>
-            {unreadOnly && !searchText
-              ? "No unread conversations."
-              : "No conversations found."}
+      {loading && <ActivityIndicator color={colors.accent} />}
+
+      {!!error && (
+        <Text accessibilityRole="alert" style={styles.body}>
+          {error}
+        </Text>
+      )}
+
+      {peopleMode
+        ? filteredPeople.map((person) => (
+            <Pressable
+              key={person.id}
+              accessibilityRole="button"
+              disabled={!!opening}
+              onPress={() => void openChat(person.id)}
+              style={styles.person}
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={styles.name}>{person.name}</Text>
+                <Text style={styles.subtitle}>
+                  {person.area || "Community member"}
+                </Text>
+              </View>
+
+              {opening === person.id ? (
+                <ActivityIndicator color={colors.accent} />
+              ) : (
+                <Text style={styles.body}>Chat →</Text>
+              )}
+            </Pressable>
+          ))
+        : filteredChats.map((chat) => (
+            <MessageItem
+              key={chat.id}
+              conversation={{
+                ...chat,
+                timestamp: timeLabel(chat.timestamp),
+                messages: [],
+              }}
+            />
+          ))}
+
+      {!loading &&
+        !error &&
+        (peopleMode
+          ? filteredPeople.length === 0
+          : filteredChats.length === 0) && (
+          <Text style={styles.subtitle}>
+            {peopleMode
+              ? "No other members found."
+              : unreadOnly
+                ? "No unread conversations."
+                : "No conversations yet. Tap New message to start."}
           </Text>
         )}
-      </View>
     </ScrollView>
   );
 }
 
 function createStyles(colors: AppColors) {
   return StyleSheet.create({
-    container: {
+    container: { flex: 1, backgroundColor: colors.background },
+    content: { padding: 20, paddingBottom: 32, gap: 16 },
+    center: {
       flex: 1,
+      justifyContent: "center",
+      alignItems: "center",
+      padding: 24,
+      gap: 20,
       backgroundColor: colors.background,
     },
-    content: {
-      padding: 20,
-      paddingBottom: 32,
-    },
-    headingRow: {
-      flexDirection: "row",
-      alignItems: "flex-start",
-      justifyContent: "space-between",
-      paddingBottom: 18,
-    },
     heading: {
-      gap: 4,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: 12,
     },
     title: {
       color: colors.text,
       fontSize: 26,
       fontWeight: "700",
+      flexShrink: 1,
     },
-    subtitle: {
-      color: colors.muted,
-      fontSize: 14,
-    },
-    notificationButton: {
-      width: 44,
-      height: 44,
-      alignItems: "center",
-      justifyContent: "center",
-    },
-    notificationBadge: {
-      position: "absolute",
-      top: 0,
-      right: 0,
-      minWidth: 19,
-      height: 19,
-      paddingHorizontal: 4,
-      borderRadius: 10,
-      backgroundColor: "#E87561",
-      alignItems: "center",
-      justifyContent: "center",
-    },
-    notificationBadgeText: {
-      color: "#FFFFFF",
-      fontSize: 11,
-      fontWeight: "800",
-    },
-    searchBar: {
-      height: 54,
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 10,
-      paddingHorizontal: 15,
-      marginBottom: 22,
+    subtitle: { color: colors.muted, fontSize: 16, lineHeight: 23 },
+    body: { color: colors.text, fontSize: 16, lineHeight: 23 },
+    name: { color: colors.text, fontSize: 18, fontWeight: "600" },
+    input: {
+      minHeight: 54,
+      fontSize: 17,
+      color: colors.text,
       backgroundColor: colors.surface,
+      borderColor: colors.border,
+      borderWidth: 1,
+      borderRadius: 14,
+      paddingHorizontal: 15,
+      paddingVertical: 12,
+    },
+    button: {
+      minHeight: 48,
+      justifyContent: "center",
+      paddingHorizontal: 16,
+      borderRadius: 12,
+      backgroundColor: colors.accent,
+    },
+    buttonText: {
+      color: colors.background,
+      fontSize: 16,
+      fontWeight: "700",
+    },
+    filters: { flexDirection: "row", gap: 12 },
+    filter: {
+      minHeight: 48,
+      justifyContent: "center",
+      paddingHorizontal: 20,
+      borderRadius: 24,
       borderWidth: 1,
       borderColor: colors.border,
-      borderRadius: 14,
     },
-    searchInput: {
-      flex: 1,
-      color: colors.text,
-      fontSize: 15,
-    },
-    conversationList: {
-      gap: 10,
-    },
-    noResults: {
-      color: colors.muted,
-      fontSize: 14,
-      textAlign: "center",
-      marginTop: 30,
+    person: {
+      flexDirection: "row",
+      gap: 12,
+      alignItems: "center",
+      minHeight: 80,
+      borderWidth: 1,
+      borderColor: colors.border,
+      backgroundColor: colors.surface,
+      borderRadius: 12,
+      padding: 16,
     },
   });
 }

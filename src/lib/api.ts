@@ -7,7 +7,7 @@ const API_URL = (
 export class ApiError extends Error {
   constructor(
     message: string,
-    public status = 0
+    public status = 0,
   ) {
     super(message);
     this.name = "ApiError";
@@ -16,27 +16,22 @@ export class ApiError extends Error {
 
 export async function apiRequest<T>(
   account: User,
-  method: "GET" | "PUT",
-  body?: unknown
+  method: "GET" | "PUT" | "POST",
+  body?: unknown,
+  path = "/api/me",
 ): Promise<T> {
   const token = await account.getIdToken();
   const controller = new AbortController();
-
-  const timeout = setTimeout(
-    () => controller.abort(),
-    10000
-  );
+  const timeout = setTimeout(() => controller.abort(), 10000);
 
   try {
-    const response = await fetch(`${API_URL}/api/me`, {
+    const response = await fetch(`${API_URL}${path}`, {
       method,
       headers: {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
-      ...(body === undefined
-        ? {}
-        : { body: JSON.stringify(body) }),
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       signal: controller.signal,
     });
 
@@ -47,7 +42,7 @@ export async function apiRequest<T>(
         typeof data?.message === "string"
           ? data.message
           : "The server could not complete your request.",
-        response.status
+        response.status,
       );
     }
 
@@ -58,7 +53,7 @@ export async function apiRequest<T>(
     throw new ApiError(
       controller.signal.aborted
         ? "The connection took too long. Please try again."
-        : "Cannot connect to ReIdentify. Please try again."
+        : "Cannot connect to ReIdentify. Please try again.",
     );
   } finally {
     clearTimeout(timeout);
