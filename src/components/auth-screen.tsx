@@ -13,6 +13,8 @@ import {
   type TextInputProps,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { AreaField } from "./area-field";
+import { resolveArea, type AreaSelection } from "../lib/locations";
 
 import type { AppColors } from "../constants/app-colors";
 import { useAuth } from "../context/auth-context";
@@ -128,6 +130,8 @@ export function AuthScreen({
   const [errors, setErrors] = useState<AuthErrors>({});
   const [formError, setFormError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [location, setLocation] = useState<AreaSelection | null>(null);
+  const [locationError, setLocationError] = useState("");
   const pending = useRef(false);
   const nameInput = useRef<TextInput>(null);
   const emailInput = useRef<TextInput>(null);
@@ -138,6 +142,7 @@ export function AuthScreen({
   useEffect(() => {
     setErrors({});
     setFormError("");
+    setLocationError("");
     setFields((current) => ({ ...current, password: "", confirmPassword: "" }));
   }, [mode]);
 
@@ -165,13 +170,18 @@ export function AuthScreen({
       return;
     }
 
+    if (isRegister && !resolveArea(location)) {
+      setLocationError("Choose your city or town to continue.");
+      return;
+    }
+
     Keyboard.dismiss();
     pending.current = true;
     setSubmitting(true);
 
     try {
       const result = isRegister
-        ? await register(fields)
+        ? await register({ ...fields, location })
         : await signIn(fields.email, fields.password);
 
       if (!result.ok) {
@@ -191,8 +201,6 @@ export function AuthScreen({
       setSubmitting(false);
     }
   }
-
-
 
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
@@ -318,6 +326,19 @@ export function AuthScreen({
                   textContentType: "newPassword",
                   returnKeyType: "go",
                   onSubmitEditing: () => void submit(),
+                }}
+              />
+            )}
+
+            {isRegister && (
+              <AreaField
+                value={location}
+                error={locationError}
+                disabled={submitting}
+                onChange={(value) => {
+                  setLocation(value);
+                  setLocationError("");
+                  setFormError("");
                 }}
               />
             )}

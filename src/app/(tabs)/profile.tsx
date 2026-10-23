@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { router, useFocusEffect } from "expo-router";
 import { ActivityIndicator } from "react-native";
 import {
@@ -16,6 +16,12 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { AuthScreen, FormField } from "../../components/auth-screen";
+import { AreaField } from "../../components/area-field";
+import {
+  areaLabel,
+  resolveArea,
+  selectionForProfile,
+} from "../../lib/locations";
 import type { AppColors } from "../../constants/app-colors";
 import {
   DEMO_USER_ID,
@@ -29,13 +35,7 @@ type Page = "overview" | "login" | "register" | "edit";
 
 export default function ProfileScreen() {
   const { colors, theme, toggleTheme } = useAppTheme();
-const {
-  user,
-  signOut,
-  loading,
-  authError,
-  refreshProfile,
-} = useAuth();
+  const { user, signOut, loading, authError, refreshProfile } = useAuth();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [page, setPage] = useState<Page>("overview");
 
@@ -52,27 +52,22 @@ const {
       return () => subscription.remove();
     }, [page]),
   );
-if (page === "overview" && loading) {
-  return (
-    <View
-      style={{
-        flex: 1,
-        justifyContent: "center",
-        alignItems: "center",
-        gap: 12,
-        backgroundColor: colors.background,
-      }}
-    >
-      <ActivityIndicator
-        size="large"
-        color={colors.accent}
-      />
-      <Text style={{ color: colors.text }}>
-        Loading your profile…
-      </Text>
-    </View>
-  );
-}
+  if (page === "overview" && loading) {
+    return (
+      <View
+        style={{
+          flex: 1,
+          justifyContent: "center",
+          alignItems: "center",
+          gap: 12,
+          backgroundColor: colors.background,
+        }}
+      >
+        <ActivityIndicator size="large" color={colors.accent} />
+        <Text style={{ color: colors.text }}>Loading your profile…</Text>
+      </View>
+    );
+  }
   if (page === "login" || page === "register") {
     return (
       <AuthScreen
@@ -117,9 +112,7 @@ if (page === "overview" && loading) {
               onPress={() => void refreshProfile()}
               style={styles.outlineButton}
             >
-              <Text style={styles.outlineButtonText}>
-                Try again
-              </Text>
+              <Text style={styles.outlineButtonText}>Try again</Text>
             </Pressable>
           </View>
         )}
@@ -136,7 +129,9 @@ if (page === "overview" && loading) {
                 {user.fullName}
               </Text>
               <Text style={styles.subtitle}>
-                {user.area || "Add your neighbourhood"}
+                {areaLabel(resolveArea(user.location)) ||
+                  user.area ||
+                  "Choose your area"}
               </Text>
               <Text style={styles.email}>{user.email}</Text>
               <Text style={styles.memberSince}>
@@ -328,7 +323,7 @@ if (page === "overview" && loading) {
               onPress={() =>
                 Alert.alert(
                   "Privacy",
-                  "Your profile is saved in ReIdentify's database. You can use a general neighbourhood or city for your location."
+                  "Your profile is saved in ReIdentify's database. Your area is a city and optional district in Ontario. We do not ask for a home address or postal code.",
                 )
               }
             />
@@ -337,7 +332,7 @@ if (page === "overview" && loading) {
               onPress={() =>
                 Alert.alert(
                   "Getting started",
-                  "Create an account or sign in. Use Edit profile to change your name, neighbourhood and interests."
+                  "Create an account or sign in. Use Edit profile to change your name or area. You can also choose interests in Search.",
                 )
               }
               last
@@ -415,7 +410,10 @@ function EditProfile({
   const { updateProfile } = useAuth();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [fullName, setFullName] = useState(user.fullName);
-  const [area, setArea] = useState(user.area);
+  const [location, setLocation] = useState(() => selectionForProfile(user));
+  const [locationError, setLocationError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const saveLock = useRef(false);
   const [interests, setInterests] = useState([...user.interests]);
   const [error, setError] = useState("");
 
@@ -427,21 +425,36 @@ function EditProfile({
     );
   }
 
-async function save() {
-  setError("");
-
-  const result = await updateProfile({
-    fullName,
-    area,
-    interests,
-  });
-
-  if (result.ok) {
-    onClose();
-  } else {
-    setError(result.message);
+  async function save() {
+    if (saveLock.current) return;
+    setError("");
+    if (fullName.trim().length < 2 || fullName.trim().length > 80) {
+      setError("Use a name between 2 and 80 characters.");
+      return;
+    }
+    const resolved = resolveArea(location);
+    if (!resolved || !location) {
+      setLocationError("Choose your city or town to continue.");
+      return;
+    }
+    saveLock.current = true;
+    setSaving(true);
+    try {
+      const result = await updateProfile({
+        fullName,
+        area: [resolved.district, resolved.city].filter(Boolean).join(", "),
+        interests,
+        location,
+      });
+      if (result.ok) onClose();
+      else setError(result.message);
+    } catch {
+      setError("Could not save your profile. Please try again.");
+    } finally {
+      saveLock.current = false;
+      setSaving(false);
+    }
   }
-}
 
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
@@ -457,6 +470,7 @@ async function save() {
           <Pressable
             accessibilityRole="button"
             onPress={onClose}
+            disabled={saving}
             style={styles.backButton}
           >
             <Text style={styles.accentText}>← Back to profile</Text>
@@ -476,20 +490,19 @@ async function save() {
                 setFullName(value);
                 setError("");
               }}
-              error={error || undefined}
+              disabled={saving}
               inputProps={{ autoCapitalize: "words", autoComplete: "name" }}
             />
-            <FormField
-              label="Neighbourhood or city"
-              placeholder="For example, Etobicoke"
-              value={area}
-              onChangeText={setArea}
-              inputProps={{ autoCapitalize: "words" }}
+            <AreaField
+              value={location}
+              error={locationError}
+              disabled={saving}
+              onChange={(value) => {
+                setLocation(value);
+                setLocationError("");
+                setError("");
+              }}
             />
-            <Text style={styles.locationHint}>
-              A general area is enough. You do not need to enter your home
-              address.
-            </Text>
           </View>
 
           <Text accessibilityRole="header" style={styles.sectionTitle}>
@@ -504,6 +517,7 @@ async function save() {
                   key={interest}
                   accessibilityRole="checkbox"
                   accessibilityState={{ checked: selected }}
+                  disabled={saving}
                   onPress={() => toggleInterest(interest)}
                   style={({ pressed }) => [
                     styles.interestChoice,
@@ -523,19 +537,35 @@ async function save() {
             })}
           </View>
 
+          {!!error && (
+            <Text
+              accessibilityRole="alert"
+              style={{ color: colors.text, fontSize: 16, lineHeight: 24 }}
+            >
+              {error}
+            </Text>
+          )}
           <Pressable
             accessibilityRole="button"
             onPress={save}
+            accessibilityState={{ disabled: saving, busy: saving }}
+            disabled={saving}
             style={({ pressed }) => [
               styles.primaryButton,
+              saving && styles.pressed,
               pressed && styles.pressed,
             ]}
           >
-            <Text style={styles.primaryButtonText}>Save profile</Text>
+            {saving ? (
+              <ActivityIndicator color={colors.background} />
+            ) : (
+              <Text style={styles.primaryButtonText}>Save profile</Text>
+            )}
           </Pressable>
           <Pressable
             accessibilityRole="button"
             onPress={onClose}
+            disabled={saving}
             style={styles.cancelButton}
           >
             <Text style={styles.outlineButtonText}>Cancel</Text>

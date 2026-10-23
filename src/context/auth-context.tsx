@@ -18,6 +18,11 @@ import {
 
 import { auth } from "../lib/firebase";
 import { ApiError, apiRequest } from "../lib/api";
+import {
+  resolveArea,
+  type AreaSelection,
+  type ProfileLocation,
+} from "../lib/locations";
 
 import {
   normalizeEmail,
@@ -37,6 +42,7 @@ export type AppUser = {
   fullName: string;
   email: string;
   area: string;
+  location?: ProfileLocation | null;
   interests: string[];
   joinedAt: string;
 };
@@ -50,34 +56,30 @@ export const DEMO_CREDENTIALS = {
   password: "ReIdentify123",
 } as const;
 
-type AuthResult =
-  | { ok: true }
-  | { ok: false; message: string };
+type AuthResult = { ok: true } | { ok: false; message: string };
 
-type ProfileInput = Pick<
-  AppUser,
-  "fullName" | "area" | "interests"
->;
+type ProfileInput = Pick<AppUser, "fullName" | "area" | "interests"> & {
+  location?: AreaSelection;
+};
+
+type RegistrationFields = AuthFields & { location?: AreaSelection | null };
+
+// Retain non-password setup details if Firebase succeeds but the API is offline.
+// A retry in this app session can finish the same profile without losing its area.
+const unfinishedProfiles = new Map<string, ProfileInput>();
 
 type AuthContextValue = {
   user: AppUser | null;
   loading: boolean;
   authError: string;
-  signIn: (
-    email: string,
-    password: string
-  ) => Promise<AuthResult>;
-  register: (fields: AuthFields) => Promise<AuthResult>;
+  signIn: (email: string, password: string) => Promise<AuthResult>;
+  register: (fields: RegistrationFields) => Promise<AuthResult>;
   signOut: () => Promise<AuthResult>;
-  updateProfile: (
-    input: ProfileInput
-  ) => Promise<AuthResult>;
+  updateProfile: (input: ProfileInput) => Promise<AuthResult>;
   refreshProfile: () => Promise<AuthResult>;
 };
 
-const AuthContext = createContext<
-  AuthContextValue | undefined
->(undefined);
+const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 function errorMessage(error: unknown): string {
   const code = (error as { code?: string })?.code;
@@ -123,32 +125,23 @@ function errorMessage(error: unknown): string {
 
 async function saveProfile(
   account: User,
-  input: ProfileInput
+  input: ProfileInput,
 ): Promise<AppUser> {
-  const result = await apiRequest<{ user: AppUser }>(
-    account,
-    "PUT",
-    input
-  );
+  const result = await apiRequest<{ user: AppUser }>(account, "PUT", input);
 
+  unfinishedProfiles.delete(account.uid);
   return result.user;
 }
 
-async function loadProfile(
-  account: User
-): Promise<AppUser> {
+async function loadProfile(account: User): Promise<AppUser> {
   try {
-    const result = await apiRequest<{ user: AppUser }>(
-      account,
-      "GET"
-    );
+    const result = await apiRequest<{ user: AppUser }>(account, "GET");
 
+    const unfinished = unfinishedProfiles.get(account.uid);
+    if (unfinished) return saveProfile(account, unfinished);
     return result.user;
   } catch (error) {
-    if (
-      !(error instanceof ApiError) ||
-      error.status !== 404
-    ) {
+    if (!(error instanceof ApiError) || error.status !== 404) {
       throw error;
     }
 
@@ -156,20 +149,18 @@ async function loadProfile(
     // Firebase account was created.
     const name = account.displayName?.trim();
 
-    return saveProfile(account, {
-      fullName:
-        name && name.length >= 2 ? name : "New member",
-      area: "",
-      interests: [],
-    });
+    return saveProfile(
+      account,
+      unfinishedProfiles.get(account.uid) ?? {
+        fullName: name && name.length >= 2 ? name : "New member",
+        area: "",
+        interests: [],
+      },
+    );
   }
 }
 
-export function AuthProvider({
-  children,
-}: {
-  children: ReactNode;
-}) {
+export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AppUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState("");
@@ -181,47 +172,33 @@ export function AuthProvider({
   useEffect(() => {
     mounted.current = true;
 
-    const unsubscribe = onAuthStateChanged(
-      auth,
-      (account) => {
-        if (pending.current) return;
+    const unsubscribe = onAuthStateChanged(auth, (account) => {
+      if (pending.current) return;
 
-        const requestVersion = ++version.current;
+      const requestVersion = ++version.current;
 
-        setUser(null);
-        setAuthError("");
-        setLoading(true);
+      setUser(null);
+      setAuthError("");
+      setLoading(true);
 
-        void (async () => {
-          try {
-            const profile = account
-              ? await loadProfile(account)
-              : null;
+      void (async () => {
+        try {
+          const profile = account ? await loadProfile(account) : null;
 
-            if (
-              mounted.current &&
-              version.current === requestVersion
-            ) {
-              setUser(profile);
-            }
-          } catch (error) {
-            if (
-              mounted.current &&
-              version.current === requestVersion
-            ) {
-              setAuthError(errorMessage(error));
-            }
-          } finally {
-            if (
-              mounted.current &&
-              version.current === requestVersion
-            ) {
-              setLoading(false);
-            }
+          if (mounted.current && version.current === requestVersion) {
+            setUser(profile);
           }
-        })();
-      }
-    );
+        } catch (error) {
+          if (mounted.current && version.current === requestVersion) {
+            setAuthError(errorMessage(error));
+          }
+        } finally {
+          if (mounted.current && version.current === requestVersion) {
+            setLoading(false);
+          }
+        }
+      })();
+    });
 
     return () => {
       mounted.current = false;
@@ -231,7 +208,7 @@ export function AuthProvider({
   }, []);
 
   async function runAction(
-    action: () => Promise<AppUser | null>
+    action: () => Promise<AppUser | null>,
   ): Promise<AuthResult> {
     if (pending.current) {
       return {
@@ -251,19 +228,11 @@ export function AuthProvider({
 
       const profile = await action();
 
-      if (
-        profile &&
-        auth.currentUser?.uid !== profile.id
-      ) {
-        throw new Error(
-          "Your login changed. Please try again."
-        );
+      if (profile && auth.currentUser?.uid !== profile.id) {
+        throw new Error("Your login changed. Please try again.");
       }
 
-      if (
-        !mounted.current ||
-        version.current !== requestVersion
-      ) {
+      if (!mounted.current || version.current !== requestVersion) {
         return {
           ok: false,
           message: "Please try again.",
@@ -275,16 +244,11 @@ export function AuthProvider({
     } catch (error) {
       const message = errorMessage(error);
 
-      if (
-        mounted.current &&
-        version.current === requestVersion
-      ) {
+      if (mounted.current && version.current === requestVersion) {
         setAuthError(message);
 
         setUser((current) =>
-          current?.id === auth.currentUser?.uid
-            ? current
-            : null
+          current?.id === auth.currentUser?.uid ? current : null,
         );
       }
 
@@ -292,19 +256,13 @@ export function AuthProvider({
     } finally {
       pending.current = false;
 
-      if (
-        mounted.current &&
-        version.current === requestVersion
-      ) {
+      if (mounted.current && version.current === requestVersion) {
         setLoading(false);
       }
     }
   }
 
-  async function signIn(
-    email: string,
-    password: string
-  ): Promise<AuthResult> {
+  async function signIn(email: string, password: string): Promise<AuthResult> {
     const errors = validateAuthForm("login", {
       fullName: "",
       email,
@@ -320,16 +278,14 @@ export function AuthProvider({
       const result = await signInWithEmailAndPassword(
         auth,
         normalizeEmail(email),
-        password
+        password,
       );
 
       return loadProfile(result.user);
     });
   }
 
-  async function register(
-    fields: AuthFields
-  ): Promise<AuthResult> {
+  async function register(fields: RegistrationFields): Promise<AuthResult> {
     const errors = validateAuthForm("register", fields);
     const message = Object.values(errors)[0];
 
@@ -342,32 +298,43 @@ export function AuthProvider({
       };
     }
 
+    const location = resolveArea(fields.location);
+    if (!location) {
+      return { ok: false, message: "Choose your city or town to continue." };
+    }
+
     return runAction(async () => {
       let accountCreated = false;
 
       try {
-        const result =
-          await createUserWithEmailAndPassword(
-            auth,
-            normalizeEmail(fields.email),
-            fields.password
-          );
+        const result = await createUserWithEmailAndPassword(
+          auth,
+          normalizeEmail(fields.email),
+          fields.password,
+        );
 
         accountCreated = true;
+
+        const profileInput: ProfileInput = {
+          fullName: fields.fullName.trim(),
+          area: [location.district, location.city].filter(Boolean).join(", "),
+          interests: [],
+          location: {
+            cityId: location.cityId,
+            districtId: location.districtId,
+          },
+        };
+        unfinishedProfiles.set(result.user.uid, profileInput);
 
         await updateFirebaseProfile(result.user, {
           displayName: fields.fullName.trim(),
         });
 
-        return await saveProfile(result.user, {
-          fullName: fields.fullName.trim(),
-          area: "",
-          interests: [],
-        });
+        return await saveProfile(result.user, profileInput);
       } catch (error) {
         if (accountCreated) {
           throw new Error(
-            `Your account was created, but profile setup could not finish. ${errorMessage(error)} Choose Sign in or Try again to finish setup.`
+            `Your account was created, but profile setup could not finish. ${errorMessage(error)} Choose Sign in or Try again to finish setup.`,
           );
         }
 
@@ -383,16 +350,12 @@ export function AuthProvider({
     });
   }
 
-  async function updateProfile(
-    input: ProfileInput
-  ): Promise<AuthResult> {
+  async function updateProfile(input: ProfileInput): Promise<AuthResult> {
     return runAction(async () => {
       const account = auth.currentUser;
 
       if (!account) {
-        throw new Error(
-          "Please sign in to edit your profile."
-        );
+        throw new Error("Please sign in to edit your profile.");
       }
 
       return saveProfile(account, input);
@@ -428,9 +391,7 @@ export function useAuth() {
   const context = useContext(AuthContext);
 
   if (!context) {
-    throw new Error(
-      "useAuth must be used inside AuthProvider"
-    );
+    throw new Error("useAuth must be used inside AuthProvider");
   }
 
   return context;

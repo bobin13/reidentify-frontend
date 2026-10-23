@@ -7,6 +7,71 @@ const { existsSync } = require("node:fs");
 const { initializeApp, applicationDefault } = require("firebase-admin/app");
 const { getAuth } = require("firebase-admin/auth");
 const { getFirestore } = require("firebase-admin/firestore");
+const { cities } = require("../shared/ontario-areas.json");
+const cityIndex = new Map(cities.map((city) => [city.id, city]));
+
+function resolveLocation(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return null;
+  if (typeof input.cityId !== "string") return null;
+  if (input.districtId != null && typeof input.districtId !== "string")
+    return null;
+  const city = cityIndex.get(input.cityId);
+  if (!city) return null;
+  const district =
+    input.districtId == null
+      ? null
+      : city.districts.find((item) => item.id === input.districtId);
+  if (input.districtId != null && !district) return null;
+  // The catalogue supplies names and approximate centres. Never trust client coordinates.
+  return {
+    province: "Ontario",
+    cityId: city.id,
+    city: city.name,
+    districtId: district?.id ?? null,
+    district: district?.name ?? null,
+    coordinate: { ...(district?.coordinate ?? city.coordinate) },
+  };
+}
+
+function normalizeArea(value) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function legacyLocation(area) {
+  const parts = (typeof area === "string" ? area : "")
+    .split(/[,·]/)
+    .map(normalizeArea)
+    .filter(Boolean);
+  const matchedCities = cities.filter((city) =>
+    parts.includes(normalizeArea(city.name)),
+  );
+  if (matchedCities.length === 1) {
+    const city = matchedCities[0];
+    const district = city.districts.find((item) =>
+      parts.includes(normalizeArea(item.name)),
+    );
+    return resolveLocation({
+      cityId: city.id,
+      districtId: district?.id ?? null,
+    });
+  }
+  if (matchedCities.length > 1) return null;
+  const matches = cities.flatMap((city) =>
+    city.districts
+      .filter((district) => parts.includes(normalizeArea(district.name)))
+      .map((district) => ({ cityId: city.id, districtId: district.id })),
+  );
+  return matches.length === 1 ? resolveLocation(matches[0]) : null;
+}
+
+function locationArea(location) {
+  return [location.district, location.city].filter(Boolean).join(", ");
+}
 
 function createApp({ db, firebaseAuth }) {
   const app = express();
@@ -73,14 +138,17 @@ function createApp({ db, firebaseAuth }) {
     }
 
     const data = snapshot.data();
+    const location =
+      resolveLocation(data.location) || legacyLocation(data.area);
 
     res.json({
       user: {
         id: req.account.uid,
         email: req.account.email || "",
         fullName: data.fullName,
-        area: data.area,
-        interests: data.interests,
+        area: location ? locationArea(location) : data.area || "",
+        location,
+        interests: data.interests || [],
         joinedAt: data.joinedAt,
       },
     });
@@ -96,26 +164,43 @@ function createApp({ db, firebaseAuth }) {
       });
     }
 
-    const { fullName, area = "", interests = [] } = input;
+    const { fullName, area, interests } = input;
 
     if (
       typeof fullName !== "string" ||
       fullName.trim().length < 2 ||
       fullName.trim().length > 80 ||
-      typeof area !== "string" ||
-      area.trim().length > 120 ||
-      !Array.isArray(interests) ||
-      interests.length > 150 ||
-      interests.some(
-        (item) =>
-          typeof item !== "string" ||
-          item.trim().length < 1 ||
-          item.trim().length > 80,
-      )
+      (area !== undefined &&
+        (typeof area !== "string" || area.trim().length > 120)) ||
+      (interests !== undefined &&
+        (!Array.isArray(interests) ||
+          interests.length > 150 ||
+          interests.some(
+            (item) =>
+              typeof item !== "string" ||
+              item.trim().length < 1 ||
+              item.trim().length > 80,
+          )))
     ) {
       return res.status(400).json({
         message: "Check your name, area and interests.",
       });
+    }
+
+    const changesLocation = Object.prototype.hasOwnProperty.call(
+      input,
+      "location",
+    );
+    const requestedLocation = changesLocation
+      ? resolveLocation(input.location)
+      : null;
+    if (changesLocation && !requestedLocation) {
+      return res
+        .status(400)
+        .json({
+          message:
+            "Choose an Ontario city and a district belonging to that city, or use the city only.",
+        });
     }
 
     // The ID comes from Firebase, never from the request body.
@@ -124,13 +209,22 @@ function createApp({ db, firebaseAuth }) {
     const user = await db.runTransaction(async (transaction) => {
       const snapshot = await transaction.get(reference);
       const previous = snapshot.exists ? snapshot.data() : {};
+      // Older Search screens send only area/interests. Keep their saved location.
+      const location = changesLocation
+        ? requestedLocation
+        : resolveLocation(previous.location) ||
+          legacyLocation(previous.area || area);
+      const selectedInterests = interests ?? previous.interests ?? [];
 
       const profile = {
         id: req.account.uid,
         email: req.account.email || "",
         fullName: fullName.trim(),
-        area: area.trim(),
-        interests: [...new Set(interests.map((item) => item.trim()))],
+        area: location
+          ? locationArea(location)
+          : (area ?? previous.area ?? "").trim(),
+        location,
+        interests: [...new Set(selectedInterests.map((item) => item.trim()))],
         joinedAt: previous.joinedAt || new Date().toISOString(),
       };
 
