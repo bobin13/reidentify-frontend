@@ -1,5 +1,15 @@
-import { useMemo, useState } from "react";
 import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+
+import { router } from "expo-router";
+import { SymbolView } from "expo-symbols";
+
+import {
+  ActivityIndicator,
   Keyboard,
   KeyboardAvoidingView,
   Modal,
@@ -11,17 +21,24 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { SymbolView } from "expo-symbols";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+
+import { SafeAreaView } from "react-native-safe-area-context";
 
 import type { AppColors } from "../../constants/app-colors";
+
+import {
+  INTEREST_CATEGORIES,
+  recognizedInterests,
+  type InterestCategory,
+} from "../../constants/interests";
+
+import { useAuth } from "../../context/auth-context";
 import { useAppTheme } from "../../context/theme-context";
 
-type Filter = "all" | "groups" | "people";
+type Section = "interests" | "groups" | "people";
 
-type CommunityEntry = {
+type Person = {
   id: string;
-  kind: "group" | "person";
   name: string;
   area: string;
   description: string;
@@ -29,94 +46,45 @@ type CommunityEntry = {
   info: string;
 };
 
-// Sample records. Replace these with database/API records later.
-const COMMUNITY: CommunityEntry[] = [
+// Existing preview people.
+// Replace with real records when people discovery is connected.
+const PEOPLE: Person[] = [
   {
-    id: "group-walking",
-    kind: "group",
-    name: "Walking & outdoors",
-    area: "Etobicoke, Toronto",
-    description:
-      "Enjoy gentle walks, gardening conversations and fresh air with a friendly local group. Everyone can take things at their own pace.",
-    interests: ["Walking", "Gardening", "Nature"],
-    info: "24 members · Saturday morning meetups",
-  },
-  {
-    id: "group-books",
-    kind: "group",
-    name: "Learning & books",
-    area: "Etobicoke, Toronto",
-    description:
-      "A welcoming book club for sharing stories, discussing books and learning something new together. You do not need to be an expert to join the conversation.",
-    interests: ["Reading", "Books", "Learning"],
-    info: "18 members · Tuesday afternoon meetups",
-  },
-  {
-    id: "group-volunteering",
-    kind: "group",
-    name: "Volunteering",
-    area: "Etobicoke, Toronto",
-    description:
-      "Meet neighbours while helping your community. Explore food bank support, community gardening and other local volunteer activities.",
-    interests: ["Volunteering", "Community", "Helping others"],
-    info: "16 members · Meetups vary by activity",
-  },
-  {
-    id: "group-music",
-    kind: "group",
-    name: "Music & culture",
-    area: "Etobicoke, Toronto",
-    description:
-      "Share favourite music, enjoy concerts and discover cultural activities together. From a relaxed music chat to a museum visit, there is plenty to explore.",
-    interests: ["Music", "Concerts", "Culture", "Museums"],
-    info: "22 members · Monthly meetups",
-  },
-  {
-    id: "person-riley",
-    kind: "person",
+    id: "riley",
     name: "Riley Chen",
     area: "Etobicoke, Toronto",
     description:
       "Enjoys relaxed park walks and tending a small garden. Looking forward to meeting neighbours with similar interests.",
-    interests: ["Walking", "Gardening", "Nature"],
-    info: "Languages: English, Mandarin",
+    interests: ["Walking", "Gardening", "Nature outings"],
+    info: "English, Mandarin",
   },
   {
-    id: "person-samira",
-    kind: "person",
+    id: "samira",
     name: "Samira Khan",
     area: "Etobicoke, Toronto",
     description:
       "Enjoys volunteering, sharing recipes and helping with community activities. Always happy to learn something new.",
-    interests: ["Volunteering", "Cooking", "Community"],
-    info: "Languages: English, Urdu",
+    interests: ["Volunteering", "Cooking", "Community events"],
+    info: "English, Urdu",
   },
   {
-    id: "person-theo",
-    kind: "person",
+    id: "theo",
     name: "Theo Martin",
     area: "Toronto",
     description:
       "A music enthusiast who enjoys local concerts, museum visits and discovering different cultures.",
-    interests: ["Music", "Concerts", "Culture"],
-    info: "Languages: English, French",
+    interests: ["Listening to music", "Concerts", "Museums"],
+    info: "English, French",
   },
   {
-    id: "person-ava",
-    kind: "person",
+    id: "ava",
     name: "Ava Brooks",
     area: "Etobicoke, Toronto",
     description:
       "Enjoys a good book, friendly discussions and learning new skills. Interested in finding a local book club.",
-    interests: ["Books", "Reading", "Learning"],
-    info: "Languages: English",
+    interests: ["Reading", "Book clubs", "Lectures/classes"],
+    info: "English",
   },
-];
-
-const FILTERS: { key: Filter; label: string }[] = [
-  { key: "all", label: "All" },
-  { key: "groups", label: "Groups" },
-  { key: "people", label: "People" },
 ];
 
 function normalize(value: string) {
@@ -127,31 +95,84 @@ function normalize(value: string) {
     .trim();
 }
 
-function getInitials(name: string) {
-  return name
-    .split(/\s+/)
-    .filter((word) => word !== "&")
-    .map((word) => word[0] || "")
-    .join("")
-    .slice(0, 2)
-    .toUpperCase();
+function sameSelection(
+  a: readonly string[],
+  b: readonly string[]
+) {
+  const left = new Set(a);
+  const right = new Set(b);
+
+  return (
+    left.size === right.size &&
+    [...left].every((value) => right.has(value))
+  );
 }
 
 export default function SearchScreen() {
   const { colors } = useAppTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
-  const insets = useSafeAreaInsets();
+  const { user, loading, updateProfile } = useAuth();
 
-  const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<Filter>("all");
-  const [selected, setSelected] = useState<CommunityEntry | null>(
-    null
+  const styles = useMemo(
+    () => createStyles(colors),
+    [colors]
   );
 
-  const words = normalize(query).split(/\s+/).filter(Boolean);
+  const [section, setSection] =
+    useState<Section>("interests");
 
-  const matches = COMMUNITY.filter((entry) => {
-    const searchable = normalize(
+  const [category, setCategory] =
+    useState<InterestCategory | null>(null);
+
+  const [query, setQuery] = useState("");
+  const [person, setPerson] = useState<Person | null>(null);
+
+  const [draft, setDraft] = useState<{
+    owner: string;
+    values: string[];
+  } | null>(null);
+
+  const [showAll, setShowAll] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const [feedback, setFeedback] = useState<{
+    text: string;
+    error: boolean;
+  } | null>(null);
+
+  const saveLock = useRef(false);
+  const mounted = useRef(true);
+
+  const uid = user?.id ?? "";
+  const currentUid = useRef(uid);
+  currentUid.current = uid;
+
+  const saved = user?.interests ?? [];
+
+  const selected =
+    draft?.owner === uid
+      ? draft.values
+      : recognizedInterests(saved);
+
+  const dirty =
+    draft?.owner === uid &&
+    !sameSelection(selected, saved);
+
+  const busy = saving || loading;
+
+  const previousCategories = saved.some(
+    (value) => !recognizedInterests([value]).length
+  );
+
+  const shownInterests = showAll
+    ? selected
+    : selected.slice(0, 6);
+
+  const words = normalize(query)
+    .split(/\s+/)
+    .filter(Boolean);
+
+  const matches = PEOPLE.filter((entry) => {
+    const text = normalize(
       [
         entry.name,
         entry.area,
@@ -161,317 +182,696 @@ export default function SearchScreen() {
       ].join(" ")
     );
 
-    return words.every((word) => searchable.includes(word));
+    return words.every((word) => text.includes(word));
   });
 
-  const sections = [
-    {
-      key: "groups",
-      title: "Groups",
-      items: matches.filter((entry) => entry.kind === "group"),
-    },
-    {
-      key: "people",
-      title: "People",
-      items: matches.filter((entry) => entry.kind === "person"),
-    },
-  ].filter(
-    (section) => filter === "all" || filter === section.key
-  );
+  useEffect(() => {
+    mounted.current = true;
 
-  const resultCount = sections.reduce(
-    (count, section) => count + section.items.length,
-    0
-  );
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
-  function openDetails(entry: CommunityEntry) {
-    Keyboard.dismiss();
-    setSelected(entry);
+  useEffect(() => {
+    // Carry guest choices into the first sign-in.
+    // A signed-in account's draft never moves to another account.
+    setDraft((current) =>
+      current?.owner === "" && uid
+        ? { owner: uid, values: current.values }
+        : null
+    );
+
+    setCategory(null);
+    setPerson(null);
+    setFeedback(null);
+    setShowAll(false);
+  }, [uid]);
+
+  function choose(values: string[]) {
+    if (busy) return;
+
+    setDraft({
+      owner: uid,
+      values: recognizedInterests(values),
+    });
+
+    setFeedback(null);
+  }
+
+  function toggle(interest: string) {
+    choose(
+      selected.includes(interest)
+        ? selected.filter((value) => value !== interest)
+        : [...selected, interest]
+    );
+  }
+
+  async function save() {
+    if (!user || busy || !dirty || saveLock.current) {
+      return;
+    }
+
+    const owner = user.id;
+    const values = [...selected];
+
+    saveLock.current = true;
+    setSaving(true);
+    setFeedback(null);
+
+    try {
+      const result = await updateProfile({
+        fullName: user.fullName,
+        area: user.area,
+        interests: values,
+      });
+
+      if (
+        !mounted.current ||
+        currentUid.current !== owner
+      ) {
+        return;
+      }
+
+      if (!result.ok) {
+        setFeedback({
+          text: result.message,
+          error: true,
+        });
+        return;
+      }
+
+      setDraft(null);
+      setCategory(null);
+
+      setFeedback({
+        text: "Your interests have been saved.",
+        error: false,
+      });
+    } catch (error) {
+      if (
+        mounted.current &&
+        currentUid.current === owner
+      ) {
+        setFeedback({
+          text:
+            error instanceof Error
+              ? error.message
+              : "Could not save. Please try again.",
+          error: true,
+        });
+      }
+    } finally {
+      saveLock.current = false;
+
+      if (mounted.current) {
+        setSaving(false);
+      }
+    }
+  }
+
+  function saveBar() {
+    return (
+      <View style={styles.saveBar}>
+        {feedback && (
+          <Text
+            accessibilityRole={
+              feedback.error ? "alert" : undefined
+            }
+            accessibilityLiveRegion="polite"
+            style={styles.feedback}
+          >
+            {feedback.text}
+          </Text>
+        )}
+
+        <Text
+          style={styles.saveHint}
+          accessibilityLiveRegion="polite"
+        >
+          {loading && !user
+            ? "Loading your interests…"
+            : !user
+              ? "Sign in to save interests to your profile."
+              : `${selected.length} ${
+                  selected.length === 1
+                    ? "interest"
+                    : "interests"
+                } selected${
+                  dirty ? " · Unsaved changes" : ""
+                }`}
+        </Text>
+
+        {!user && !loading ? (
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => {
+              setCategory(null);
+              router.push("/(tabs)/profile");
+            }}
+            style={styles.primaryButton}
+          >
+            <Text style={styles.primaryText}>
+              Sign in to save
+            </Text>
+          </Pressable>
+        ) : (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{
+              disabled: busy || !dirty,
+              busy: saving,
+            }}
+            disabled={busy || !dirty}
+            onPress={() => void save()}
+            style={({ pressed }) => [
+              styles.primaryButton,
+              (busy || !dirty) && styles.disabled,
+              pressed && styles.pressed,
+            ]}
+          >
+            {saving && (
+              <ActivityIndicator
+                color={colors.background}
+              />
+            )}
+
+            <Text style={styles.primaryText}>
+              {saving ? "Saving…" : "Save interests"}
+            </Text>
+          </Pressable>
+        )}
+      </View>
+    );
   }
 
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === "ios" ? "padding" : "height"}
-    >
-      <ScrollView
-        contentContainerStyle={styles.content}
-        keyboardShouldPersistTaps="handled"
-        keyboardDismissMode="on-drag"
-        showsVerticalScrollIndicator={false}
+    <>
+      <KeyboardAvoidingView
+        style={styles.container}
+        behavior={
+          Platform.OS === "ios" ? "padding" : "height"
+        }
+        accessibilityElementsHidden={
+          !!category || !!person
+        }
+        importantForAccessibility={
+          category || person
+            ? "no-hide-descendants"
+            : "auto"
+        }
       >
-        <View style={styles.heading}>
-          <Text accessibilityRole="header" style={styles.title}>
+        <View style={styles.top}>
+          <Text
+            accessibilityRole="header"
+            style={styles.title}
+          >
             Search
           </Text>
+
           <Text style={styles.subtitle}>
-            Find groups and people in your community
+            Explore interests and find your community
           </Text>
-        </View>
 
-        <View style={styles.searchBar}>
-          <SymbolView
-            name={{
-              ios: "magnifyingglass",
-              android: "search",
-              web: "search",
-            }}
-            size={22}
-            tintColor={colors.muted}
-          />
-
-          <TextInput
-            accessibilityLabel="Search groups and people"
-            placeholder="Try gardening or a person's name"
-            placeholderTextColor={colors.muted}
-            value={query}
-            onChangeText={setQuery}
-            autoCapitalize="none"
-            autoCorrect={false}
-            returnKeyType="search"
-            onSubmitEditing={() => Keyboard.dismiss()}
-            selectionColor={colors.accent}
-            style={styles.searchInput}
-          />
-
-          {query.length > 0 && (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Clear search"
-              onPress={() => setQuery("")}
-              style={styles.clearButton}
-            >
-              <Text style={styles.clearText}>Clear</Text>
-            </Pressable>
-          )}
-        </View>
-
-        <View style={styles.filters}>
-          {FILTERS.map((option) => (
-            <Pressable
-              key={option.key}
-              accessibilityRole="button"
-              accessibilityState={{
-                selected: filter === option.key,
-              }}
-              onPress={() => setFilter(option.key)}
-              style={({ pressed }) => [
-                styles.filterButton,
-                filter === option.key && styles.activeFilter,
-                pressed && styles.pressed,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.filterText,
-                  filter === option.key &&
-                    styles.activeFilterText,
+          <View style={styles.tabs}>
+            {(
+              ["interests", "groups", "people"] as const
+            ).map((value) => (
+              <Pressable
+                key={value}
+                accessibilityRole="button"
+                accessibilityState={{
+                  selected: section === value,
+                }}
+                onPress={() => {
+                  Keyboard.dismiss();
+                  setSection(value);
+                  setQuery("");
+                }}
+                style={({ pressed }) => [
+                  styles.tab,
+                  section === value && styles.activeTab,
+                  pressed && styles.pressed,
                 ]}
               >
-                {option.label}
-              </Text>
-            </Pressable>
-          ))}
+                <Text
+                  style={[
+                    styles.tabText,
+                    section === value &&
+                      styles.activeTabText,
+                  ]}
+                >
+                  {value === "interests"
+                    ? "Interests"
+                    : value === "groups"
+                      ? "Groups"
+                      : "People"}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
         </View>
 
-        <Text
-          accessibilityLiveRegion="polite"
-          style={styles.resultCount}
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={styles.content}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
         >
-          {resultCount} {resultCount === 1 ? "result" : "results"}
-          {query.trim()
-            ? ` for “${query.trim()}”`
-            : " to explore"}
-        </Text>
+          {section === "interests" ? (
+            <>
+              <View style={styles.summary}>
+                <Text
+                  accessibilityRole="header"
+                  style={styles.sectionTitle}
+                >
+                  What do you enjoy?
+                </Text>
 
-        {sections
-          .filter((section) => section.items.length > 0)
-          .map((section) => (
-            <View key={section.key} style={styles.section}>
-              <Text
-                accessibilityRole="header"
-                style={styles.sectionTitle}
-              >
-                {section.title} ({section.items.length})
+                <Text style={styles.body}>
+                  Open a category and choose activities
+                  you like. You can choose more than one.
+                </Text>
+
+                {previousCategories && (
+                  <Text style={styles.body}>
+                    Your earlier choices were broad
+                    categories. Choose specific activities
+                    below to update them.
+                  </Text>
+                )}
+
+                {selected.length > 0 && (
+                  <>
+                    <View style={styles.tags}>
+                      {shownInterests.map((interest) => (
+                        <Pressable
+                          key={interest}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Remove ${interest}`}
+                          disabled={busy}
+                          onPress={() => toggle(interest)}
+                          style={styles.tag}
+                        >
+                          <Text style={styles.tagText}>
+                            {interest}  ×
+                          </Text>
+                        </Pressable>
+                      ))}
+                    </View>
+
+                    {selected.length > 6 && (
+                      <Pressable
+                        accessibilityRole="button"
+                        onPress={() =>
+                          setShowAll(!showAll)
+                        }
+                        style={styles.textButton}
+                      >
+                        <Text style={styles.linkText}>
+                          {showAll
+                            ? "Show fewer"
+                            : `Show all ${selected.length} selected interests`}
+                        </Text>
+                      </Pressable>
+                    )}
+
+                    <Pressable
+                      accessibilityRole="button"
+                      disabled={busy}
+                      onPress={() => choose([])}
+                      style={styles.textButton}
+                    >
+                      <Text style={styles.linkText}>
+                        Clear selections
+                      </Text>
+                    </Pressable>
+                  </>
+                )}
+
+                {dirty && (
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={busy}
+                    onPress={() => {
+                      setDraft(null);
+                      setFeedback(null);
+                    }}
+                    style={styles.textButton}
+                  >
+                    <Text style={styles.linkText}>
+                      Undo changes
+                    </Text>
+                  </Pressable>
+                )}
+              </View>
+
+              {INTEREST_CATEGORIES.map((item) => {
+                const count = item.activities.filter(
+                  (value) => selected.includes(value)
+                ).length;
+
+                return (
+                  <Pressable
+                    key={item.id}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${item.title}, ${count} selected. Choose activities`}
+                    onPress={() => setCategory(item)}
+                    style={({ pressed }) => [
+                      styles.category,
+                      count > 0 &&
+                        styles.chosenCategory,
+                      pressed && styles.pressed,
+                    ]}
+                  >
+                    <View style={styles.iconBox}>
+                      <Text
+                        style={styles.categoryIcon}
+                        accessible={false}
+                      >
+                        {item.icon}
+                      </Text>
+                    </View>
+
+                    <View style={styles.cardCopy}>
+                      <Text style={styles.cardTitle}>
+                        {item.title}
+                      </Text>
+
+                      <Text style={styles.body}>
+                        {item.description}
+                      </Text>
+
+                      <Text style={styles.categoryCount}>
+                        {count > 0
+                          ? `${count} selected`
+                          : `${item.activities.length} activities to explore`}
+                      </Text>
+                    </View>
+
+                    <Text
+                      style={styles.chevron}
+                      accessible={false}
+                    >
+                      ›
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </>
+          ) : (
+            <>
+              <View style={styles.searchBar}>
+                <SymbolView
+                  name={{
+                    ios: "magnifyingglass",
+                    android: "search",
+                    web: "search",
+                  }}
+                  size={22}
+                  tintColor={colors.muted}
+                />
+
+                <TextInput
+                  accessibilityLabel={
+                    section === "groups"
+                      ? "Search groups"
+                      : "Search people"
+                  }
+                  style={styles.searchInput}
+                  placeholder={
+                    section === "groups"
+                      ? "Search by group name or interest"
+                      : "Search by name or interest"
+                  }
+                  placeholderTextColor={colors.muted}
+                  value={query}
+                  onChangeText={setQuery}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  returnKeyType="search"
+                  onSubmitEditing={() =>
+                    Keyboard.dismiss()
+                  }
+                  selectionColor={colors.accent}
+                />
+
+                {!!query && (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Clear search"
+                    onPress={() => setQuery("")}
+                    style={styles.textButton}
+                  >
+                    <Text style={styles.linkText}>
+                      Clear
+                    </Text>
+                  </Pressable>
+                )}
+              </View>
+
+              {section === "groups" ? (
+                <View style={styles.summary}>
+                  <Text
+                    accessibilityRole="header"
+                    style={styles.sectionTitle}
+                  >
+                    Community groups
+                  </Text>
+
+                  <Text style={styles.body}>
+                    Groups bring people together around
+                    shared interests.
+                  </Text>
+
+                  <Text style={styles.body}>
+                    {query.trim()
+                      ? "No groups match your search."
+                      : "No groups to show yet."}
+                  </Text>
+                </View>
+              ) : (
+                <>
+                  <Text style={styles.body}>
+                    Preview: these are sample profiles.
+                  </Text>
+
+                  <Text
+                    accessibilityLiveRegion="polite"
+                    style={styles.body}
+                  >
+                    {matches.length}{" "}
+                    {matches.length === 1
+                      ? "person"
+                      : "people"}{" "}
+                    found
+                  </Text>
+
+                  {matches.map((entry) => (
+                    <Pressable
+                      key={entry.id}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Open person details for ${entry.name}`}
+                      onPress={() => {
+                        Keyboard.dismiss();
+                        setPerson(entry);
+                      }}
+                      style={({ pressed }) => [
+                        styles.category,
+                        pressed && styles.pressed,
+                      ]}
+                    >
+                      <View style={styles.iconBox}>
+                        <Text style={styles.avatarText}>
+                          {entry.name
+                            .split(" ")
+                            .map((word) => word[0])
+                            .slice(0, 2)
+                            .join("")}
+                        </Text>
+                      </View>
+
+                      <View style={styles.cardCopy}>
+                        <Text style={styles.cardTitle}>
+                          {entry.name}
+                        </Text>
+
+                        <Text style={styles.body}>
+                          {entry.area}
+                        </Text>
+
+                        <Text style={styles.body}>
+                          {entry.interests.join(" · ")}
+                        </Text>
+                      </View>
+
+                      <Text
+                        style={styles.chevron}
+                        accessible={false}
+                      >
+                        ›
+                      </Text>
+                    </Pressable>
+                  ))}
+
+                  {!matches.length && (
+                    <Text style={styles.body}>
+                      Try another name or interest.
+                    </Text>
+                  )}
+                </>
+              )}
+            </>
+          )}
+        </ScrollView>
+
+        {section === "interests" && saveBar()}
+      </KeyboardAvoidingView>
+
+      {/* Activity selection */}
+      <Modal
+        visible={category !== null}
+        animationType="slide"
+        onRequestClose={() => setCategory(null)}
+      >
+        <SafeAreaView
+          edges={["top", "bottom"]}
+          style={styles.container}
+          testID="interest-picker"
+        >
+          <View style={styles.pickerHeader}>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => setCategory(null)}
+              style={styles.textButton}
+            >
+              <Text style={styles.linkText}>
+                ‹ Back to categories
               </Text>
+            </Pressable>
 
-              {section.items.map((entry) => (
+            <Text
+              accessibilityRole="header"
+              style={styles.pickerTitle}
+            >
+              {category?.icon} {category?.title}
+            </Text>
+
+            <Text style={styles.body}>
+              Tap an activity to select it. Tap again to
+              remove it.
+            </Text>
+          </View>
+
+          <ScrollView
+            style={styles.scroll}
+            contentContainerStyle={styles.content}
+          >
+            {category?.activities.map((interest) => {
+              const checked =
+                selected.includes(interest);
+
+              return (
                 <Pressable
-                  key={entry.id}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Open ${entry.kind} details for ${entry.name}`}
-                  onPress={() => openDetails(entry)}
+                  key={interest}
+                  accessibilityRole="checkbox"
+                  accessibilityLabel={interest}
+                  accessibilityState={{
+                    checked,
+                    disabled: busy,
+                  }}
+                  disabled={busy}
+                  onPress={() => toggle(interest)}
                   style={({ pressed }) => [
-                    styles.card,
+                    styles.activityRow,
+                    checked && styles.chosenCategory,
                     pressed && styles.pressed,
                   ]}
                 >
                   <View
                     style={[
-                      styles.avatar,
-                      entry.kind === "group" &&
-                        styles.groupAvatar,
+                      styles.checkbox,
+                      checked && styles.checkedBox,
                     ]}
                   >
-                    <Text style={styles.initials}>
-                      {getInitials(entry.name)}
-                    </Text>
+                    {checked && (
+                      <Text
+                        style={styles.checkmark}
+                        accessible={false}
+                      >
+                        ✓
+                      </Text>
+                    )}
                   </View>
 
-                  <View style={styles.cardCopy}>
-                    <Text style={styles.cardName}>
-                      {entry.name}
-                    </Text>
-                    <Text style={styles.cardArea}>
-                      {entry.area}
-                    </Text>
-                    <Text style={styles.cardInterests}>
-                      {entry.interests.join(" · ")}
-                    </Text>
-                  </View>
-
-                  <Text
-                    style={styles.chevron}
-                    accessibilityElementsHidden
-                    importantForAccessibility="no"
-                  >
-                    ›
+                  <Text style={styles.activityText}>
+                    {interest}
                   </Text>
                 </Pressable>
-              ))}
-            </View>
-          ))}
+              );
+            })}
+          </ScrollView>
 
-        {resultCount === 0 && (
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyTitle}>
-              No results found
-            </Text>
-            <Text style={styles.emptyText}>
-              Try another name or interest, or choose a different
-              filter.
-            </Text>
+          {saveBar()}
+        </SafeAreaView>
+      </Modal>
 
+      {/* Existing sample person details */}
+      <Modal
+        visible={person !== null}
+        animationType="slide"
+        onRequestClose={() => setPerson(null)}
+      >
+        <SafeAreaView
+          edges={["top", "bottom"]}
+          style={styles.container}
+        >
+          <View style={styles.pickerHeader}>
             <Pressable
               accessibilityRole="button"
-              onPress={() => {
-                setQuery("");
-                setFilter("all");
-              }}
-              style={styles.resetButton}
+              accessibilityLabel="Close person details"
+              onPress={() => setPerson(null)}
+              style={styles.textButton}
             >
-              <Text style={styles.resetText}>
-                Show all groups and people
+              <Text style={styles.linkText}>
+                ‹ Back to people
               </Text>
             </Pressable>
           </View>
-        )}
 
-        <Text style={styles.sampleNote}>
-          Showing sample groups and people for this preview.
-        </Text>
-      </ScrollView>
-
-      <Modal
-        visible={selected !== null}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setSelected(null)}
-      >
-        <View style={styles.modalRoot}>
-          <Pressable
-            accessible={false}
-            style={styles.backdrop}
-            onPress={() => setSelected(null)}
-          />
-
-          {selected && (
-            <View
-              accessibilityViewIsModal
-              style={[
-                styles.detailSheet,
-                {
-                  paddingBottom: Math.max(insets.bottom, 20),
-                },
-              ]}
+          <ScrollView
+            contentContainerStyle={styles.content}
+          >
+            <Text
+              accessibilityRole="header"
+              style={styles.title}
             >
-              <View style={styles.detailHeader}>
-                <Text style={styles.detailKind}>
-                  {selected.kind === "group"
-                    ? "Group details"
-                    : "Person details"}
-                </Text>
+              {person?.name}
+            </Text>
 
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel="Close details"
-                  onPress={() => setSelected(null)}
-                  style={styles.closeButton}
-                >
-                  <Text style={styles.closeText}>Close</Text>
-                </Pressable>
-              </View>
+            <Text style={styles.body}>
+              Sample profile · {person?.area}
+            </Text>
 
-              <ScrollView
-                style={styles.detailScroll}
-                contentContainerStyle={styles.detailContent}
-                showsVerticalScrollIndicator={false}
-              >
-                <Text
-                  accessibilityRole="header"
-                  style={styles.detailTitle}
-                >
-                  {selected.name}
-                </Text>
+            <Text style={styles.body}>
+              {person?.description}
+            </Text>
 
-                <Text style={styles.subtitle}>
-                  {selected.area}
-                </Text>
+            <Text style={styles.body}>
+              Languages: {person?.info}
+            </Text>
 
-                <Text style={styles.detailInfo}>
-                  {selected.info}
-                </Text>
+            <Text style={styles.sectionTitle}>
+              Interests
+            </Text>
 
-                <Text
-                  accessibilityRole="header"
-                  style={styles.sectionTitle}
-                >
-                  About
-                </Text>
-
-                <Text style={styles.description}>
-                  {selected.description}
-                </Text>
-
-                <Text
-                  accessibilityRole="header"
-                  style={styles.sectionTitle}
-                >
-                  Interests
-                </Text>
-
-                <View style={styles.interestTags}>
-                  {selected.interests.map((interest) => (
-                    <View
-                      key={interest}
-                      style={styles.interestTag}
-                    >
-                      <Text style={styles.interestText}>
-                        {interest}
-                      </Text>
-                    </View>
-                  ))}
-                </View>
-
-                <Text style={styles.sampleNote}>
-                  This is a sample {selected.kind} profile.
-                </Text>
-              </ScrollView>
-            </View>
-          )}
-        </View>
+            <Text style={styles.body}>
+              {person?.interests.join(" · ")}
+            </Text>
+          </ScrollView>
+        </SafeAreaView>
       </Modal>
-    </KeyboardAvoidingView>
+    </>
   );
 }
 
@@ -481,13 +881,11 @@ function createStyles(colors: AppColors) {
       flex: 1,
       backgroundColor: colors.background,
     },
-    content: {
-      padding: 20,
-      paddingBottom: 32,
-      gap: 18,
-    },
-    heading: {
-      gap: 6,
+    top: {
+      paddingHorizontal: 20,
+      paddingTop: 18,
+      paddingBottom: 14,
+      gap: 8,
     },
     title: {
       color: colors.text,
@@ -496,8 +894,229 @@ function createStyles(colors: AppColors) {
     },
     subtitle: {
       color: colors.muted,
+      fontSize: 17,
+      lineHeight: 25,
+    },
+    tabs: {
+      flexDirection: "row",
+      gap: 8,
+      marginTop: 12,
+    },
+    tab: {
+      flex: 1,
+      minHeight: 54,
+      padding: 10,
+      alignItems: "center",
+      justifyContent: "center",
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: 14,
+      backgroundColor: colors.surface,
+    },
+    activeTab: {
+      backgroundColor: colors.accent,
+      borderColor: colors.accent,
+    },
+    tabText: {
+      color: colors.text,
+      fontSize: 17,
+      fontWeight: "700",
+      textAlign: "center",
+    },
+    activeTabText: {
+      color: colors.background,
+    },
+    scroll: {
+      flex: 1,
+    },
+    content: {
+      padding: 20,
+      paddingTop: 8,
+      paddingBottom: 28,
+      gap: 14,
+    },
+    summary: {
+      padding: 18,
+      gap: 12,
+      backgroundColor: colors.surface,
+      borderRadius: 18,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    sectionTitle: {
+      color: colors.text,
+      fontSize: 21,
+      fontWeight: "700",
+    },
+    body: {
+      color: colors.muted,
       fontSize: 16,
       lineHeight: 24,
+    },
+    category: {
+      flexDirection: "row",
+      alignItems: "center",
+      padding: 16,
+      gap: 14,
+      borderRadius: 18,
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    chosenCategory: {
+      borderColor: colors.accent,
+      borderWidth: 2,
+    },
+    iconBox: {
+      width: 52,
+      minHeight: 52,
+      borderRadius: 16,
+      backgroundColor: colors.background,
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    categoryIcon: {
+      fontSize: 28,
+    },
+    cardCopy: {
+      flex: 1,
+      minWidth: 0,
+      gap: 5,
+    },
+    cardTitle: {
+      color: colors.text,
+      fontSize: 19,
+      lineHeight: 27,
+      fontWeight: "700",
+    },
+    categoryCount: {
+      color: colors.accent,
+      fontSize: 15,
+      lineHeight: 22,
+      fontWeight: "600",
+    },
+    chevron: {
+      color: colors.muted,
+      fontSize: 28,
+    },
+    tags: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      gap: 8,
+    },
+    tag: {
+      minHeight: 48,
+      maxWidth: "100%",
+      paddingHorizontal: 12,
+      paddingVertical: 12,
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: colors.accent,
+    },
+    tagText: {
+      color: colors.text,
+      fontSize: 16,
+      lineHeight: 23,
+    },
+    textButton: {
+      minHeight: 48,
+      justifyContent: "center",
+      paddingVertical: 8,
+    },
+    linkText: {
+      color: colors.accent,
+      fontSize: 17,
+      lineHeight: 25,
+      fontWeight: "700",
+    },
+    saveBar: {
+      gap: 10,
+      padding: 16,
+      paddingHorizontal: 20,
+      borderTopWidth: 1,
+      borderTopColor: colors.border,
+      backgroundColor: colors.surface,
+    },
+    saveHint: {
+      color: colors.muted,
+      fontSize: 16,
+      lineHeight: 23,
+      textAlign: "center",
+    },
+    primaryButton: {
+      minHeight: 56,
+      borderRadius: 14,
+      padding: 14,
+      flexDirection: "row",
+      gap: 10,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: colors.accent,
+    },
+    primaryText: {
+      color: colors.background,
+      fontSize: 18,
+      lineHeight: 26,
+      fontWeight: "700",
+      textAlign: "center",
+    },
+    feedback: {
+      color: colors.text,
+      fontSize: 17,
+      lineHeight: 25,
+      fontWeight: "600",
+    },
+    disabled: {
+      opacity: 0.55,
+    },
+    pressed: {
+      opacity: 0.75,
+    },
+    pickerHeader: {
+      padding: 20,
+      paddingTop: 8,
+      gap: 12,
+    },
+    pickerTitle: {
+      color: colors.text,
+      fontSize: 26,
+      lineHeight: 35,
+      fontWeight: "700",
+    },
+    activityRow: {
+      minHeight: 68,
+      padding: 16,
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 16,
+      backgroundColor: colors.surface,
+      borderRadius: 16,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    checkbox: {
+      width: 30,
+      height: 30,
+      borderRadius: 7,
+      borderWidth: 2,
+      borderColor: colors.muted,
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    checkedBox: {
+      backgroundColor: colors.accent,
+      borderColor: colors.accent,
+    },
+    checkmark: {
+      color: colors.background,
+      fontSize: 22,
+      fontWeight: "700",
+    },
+    activityText: {
+      flex: 1,
+      color: colors.text,
+      fontSize: 19,
+      lineHeight: 28,
     },
     searchBar: {
       minHeight: 58,
@@ -515,223 +1134,12 @@ function createStyles(colors: AppColors) {
       minWidth: 0,
       paddingVertical: 14,
       color: colors.text,
-      fontSize: 16,
-    },
-    clearButton: {
-      minHeight: 48,
-      minWidth: 44,
-      justifyContent: "center",
-      alignItems: "center",
-    },
-    clearText: {
-      color: colors.accent,
-      fontSize: 14,
-      fontWeight: "700",
-    },
-    filters: {
-      flexDirection: "row",
-      gap: 10,
-    },
-    filterButton: {
-      flex: 1,
-      minHeight: 48,
-      justifyContent: "center",
-      alignItems: "center",
-      borderRadius: 12,
-      borderWidth: 1,
-      borderColor: colors.border,
-      backgroundColor: colors.surface,
-      padding: 10,
-    },
-    activeFilter: {
-      backgroundColor: colors.accent,
-      borderColor: colors.accent,
-    },
-    filterText: {
-      color: colors.text,
-      fontSize: 16,
-      fontWeight: "600",
-    },
-    activeFilterText: {
-      color: colors.background,
-    },
-    resultCount: {
-      color: colors.muted,
-      fontSize: 14,
-    },
-    section: {
-      gap: 12,
-    },
-    sectionTitle: {
-      color: colors.text,
-      fontSize: 20,
-      fontWeight: "700",
-    },
-    card: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 12,
-      padding: 16,
-      borderRadius: 16,
-      borderWidth: 1,
-      borderColor: colors.border,
-      backgroundColor: colors.surface,
-    },
-    avatar: {
-      width: 48,
-      height: 48,
-      borderRadius: 24,
-      backgroundColor: colors.accent,
-      justifyContent: "center",
-      alignItems: "center",
-    },
-    groupAvatar: {
-      borderRadius: 14,
-    },
-    initials: {
-      color: colors.background,
       fontSize: 17,
-      fontWeight: "700",
     },
-    cardCopy: {
-      flex: 1,
-      gap: 5,
-    },
-    cardName: {
-      color: colors.text,
-      fontSize: 17,
-      fontWeight: "700",
-    },
-    cardArea: {
-      color: colors.muted,
-      fontSize: 14,
-    },
-    cardInterests: {
-      color: colors.muted,
-      fontSize: 14,
-      lineHeight: 21,
-    },
-    chevron: {
-      color: colors.muted,
-      fontSize: 28,
-    },
-    pressed: {
-      opacity: 0.75,
-    },
-    emptyState: {
-      padding: 24,
-      gap: 12,
-      alignItems: "center",
-      backgroundColor: colors.surface,
-      borderRadius: 16,
-      borderWidth: 1,
-      borderColor: colors.border,
-    },
-    emptyTitle: {
-      color: colors.text,
-      fontSize: 20,
-      fontWeight: "700",
-    },
-    emptyText: {
-      color: colors.muted,
-      fontSize: 16,
-      lineHeight: 24,
-      textAlign: "center",
-    },
-    resetButton: {
-      minHeight: 48,
-      justifyContent: "center",
-      paddingVertical: 12,
-    },
-    resetText: {
+    avatarText: {
       color: colors.accent,
-      fontSize: 16,
+      fontSize: 18,
       fontWeight: "700",
-      textAlign: "center",
-    },
-    sampleNote: {
-      color: colors.muted,
-      fontSize: 13,
-      lineHeight: 20,
-    },
-    modalRoot: {
-      flex: 1,
-      justifyContent: "flex-end",
-    },
-    backdrop: {
-      ...StyleSheet.absoluteFillObject,
-      backgroundColor: "rgba(0, 0, 0, 0.55)",
-    },
-    detailSheet: {
-      maxHeight: "85%",
-      paddingHorizontal: 22,
-      paddingTop: 12,
-      borderTopLeftRadius: 24,
-      borderTopRightRadius: 24,
-      backgroundColor: colors.surface,
-      borderWidth: 1,
-      borderColor: colors.border,
-    },
-    detailHeader: {
-      flexDirection: "row",
-      alignItems: "center",
-      justifyContent: "space-between",
-      gap: 12,
-      marginBottom: 12,
-    },
-    detailKind: {
-      color: colors.muted,
-      fontSize: 15,
-      fontWeight: "600",
-    },
-    closeButton: {
-      minHeight: 48,
-      minWidth: 56,
-      justifyContent: "center",
-      alignItems: "center",
-    },
-    closeText: {
-      color: colors.accent,
-      fontSize: 16,
-      fontWeight: "700",
-    },
-    detailScroll: {
-      flexShrink: 1,
-    },
-    detailContent: {
-      gap: 16,
-      paddingBottom: 16,
-    },
-    detailTitle: {
-      color: colors.text,
-      fontSize: 26,
-      fontWeight: "700",
-    },
-    detailInfo: {
-      color: colors.accent,
-      fontSize: 16,
-      lineHeight: 24,
-    },
-    description: {
-      color: colors.text,
-      fontSize: 17,
-      lineHeight: 26,
-    },
-    interestTags: {
-      flexDirection: "row",
-      flexWrap: "wrap",
-      gap: 8,
-    },
-    interestTag: {
-      paddingHorizontal: 12,
-      paddingVertical: 10,
-      borderRadius: 12,
-      borderWidth: 1,
-      borderColor: colors.border,
-    },
-    interestText: {
-      color: colors.text,
-      fontSize: 15,
     },
   });
 }

@@ -123,7 +123,7 @@ function createApp({ db, firebaseAuth }) {
       typeof area !== "string" ||
       area.trim().length > 120 ||
       !Array.isArray(interests) ||
-      interests.length > 12 ||
+      interests.length > 150 ||
       interests.some(
         (item) =>
           typeof item !== "string" ||
