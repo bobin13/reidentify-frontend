@@ -1,5 +1,5 @@
-import { useCallback, useMemo, useRef, useState } from "react";
-import { router, useFocusEffect } from "expo-router";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import {
   ActivityIndicator,
   AppState,
@@ -10,6 +10,9 @@ import {
   TextInput,
   View,
 } from "react-native";
+
+import { GroupInbox } from "../../components/community-groups";
+import { useGroupStyles } from "../../components/group-ui";
 
 import { MessageItem } from "../../components/message-item";
 import type { AppColors } from "../../constants/app-colors";
@@ -27,6 +30,40 @@ import {
 } from "../../lib/messaging";
 
 export default function MessagesScreen() {
+  const params = useLocalSearchParams<{ section?: string }>();
+  const [section, setSection] = useState<"direct" | "groups">(
+    params.section === "groups" ? "groups" : "direct",
+  );
+  useEffect(() => {
+    if (params.section === "groups") {
+      setSection("groups");
+      router.setParams({ section: undefined });
+    }
+  }, [params.section]);
+  const { s } = useGroupStyles();
+  return (
+    <View style={s.root}>
+      <View style={s.tabs}>
+        {(["direct", "groups"] as const).map((value) => (
+          <Pressable
+            key={value}
+            accessibilityRole="button"
+            accessibilityState={{ selected: section === value }}
+            onPress={() => setSection(value)}
+            style={[s.tab, section === value && s.selected]}
+          >
+            <Text style={s.label}>
+              {value === "direct" ? "Direct chats" : "Groups"}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+      {section === "groups" ? <GroupInbox /> : <DirectMessagesScreen />}
+    </View>
+  );
+}
+
+function DirectMessagesScreen() {
   const { user, loading: authLoading } = useAuth();
   const uid = user?.id || "";
   const { colors } = useAppTheme();
@@ -134,10 +171,7 @@ export default function MessagesScreen() {
     try {
       const data = await startChat(uid, peerId);
 
-      if (
-        identity.current === uid &&
-        auth.currentUser?.uid === uid
-      ) {
+      if (identity.current === uid && auth.currentUser?.uid === uid) {
         router.push({
           pathname: "/conversation/[id]",
           params: { id: data.conversation.id },
@@ -220,9 +254,7 @@ export default function MessagesScreen() {
       </View>
 
       <Text style={styles.subtitle}>
-        {peopleMode
-          ? "Choose a member to chat with"
-          : "Your conversations"}
+        {peopleMode ? "Choose a member to chat with" : "Your conversations"}
       </Text>
 
       <TextInput
@@ -230,9 +262,7 @@ export default function MessagesScreen() {
           peopleMode ? "Search members" : "Search conversations"
         }
         style={styles.input}
-        placeholder={
-          peopleMode ? "Search names or areas" : "Search messages"
-        }
+        placeholder={peopleMode ? "Search names or areas" : "Search messages"}
         placeholderTextColor={colors.muted}
         value={query}
         onChangeText={setQuery}
@@ -253,9 +283,7 @@ export default function MessagesScreen() {
               ]}
               onPress={() => setUnreadOnly(value)}
             >
-              <Text style={styles.body}>
-                {value ? "Unread" : "All"}
-              </Text>
+              <Text style={styles.body}>{value ? "Unread" : "All"}</Text>
             </Pressable>
           ))}
         </View>

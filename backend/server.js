@@ -1,12 +1,10 @@
+const { installGroupRoutes, startGroupCleanup } = require("./groups-routes");
 require("dotenv").config();
 const { installEventRoutes } = require("./events-routes");
 const { installMessagingRoutes } = require("./messages-routes");
 const express = require("express");
 const { existsSync } = require("node:fs");
-const {
-  initializeApp,
-  applicationDefault,
-} = require("firebase-admin/app");
+const { initializeApp, applicationDefault } = require("firebase-admin/app");
 const { getAuth } = require("firebase-admin/auth");
 const { getFirestore } = require("firebase-admin/firestore");
 
@@ -25,9 +23,7 @@ function createApp({ db, firebaseAuth }) {
 
   // Every /api endpoint requires a valid Firebase login.
   app.use("/api", async (req, res, next) => {
-    const match = /^Bearer (\S+)$/i.exec(
-      req.get("authorization") || ""
-    );
+    const match = /^Bearer (\S+)$/i.exec(req.get("authorization") || "");
 
     if (!match) {
       return res.status(401).json({
@@ -36,10 +32,7 @@ function createApp({ db, firebaseAuth }) {
     }
 
     try {
-      req.account = await firebaseAuth.verifyIdToken(
-        match[1],
-        true
-      );
+      req.account = await firebaseAuth.verifyIdToken(match[1], true);
 
       next();
     } catch (error) {
@@ -60,7 +53,7 @@ function createApp({ db, firebaseAuth }) {
 
       console.error(
         "Authentication check failed:",
-        error.code || error.message
+        error.code || error.message,
       );
 
       res.status(503).json({
@@ -71,10 +64,7 @@ function createApp({ db, firebaseAuth }) {
 
   // Read the signed-in user's profile.
   app.get("/api/me", async (req, res) => {
-    const snapshot = await db
-      .collection("users")
-      .doc(req.account.uid)
-      .get();
+    const snapshot = await db.collection("users").doc(req.account.uid).get();
 
     if (!snapshot.exists) {
       return res.status(404).json({
@@ -100,21 +90,13 @@ function createApp({ db, firebaseAuth }) {
   app.put("/api/me", async (req, res) => {
     const input = req.body;
 
-    if (
-      !input ||
-      typeof input !== "object" ||
-      Array.isArray(input)
-    ) {
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
       return res.status(400).json({
         message: "Enter your profile details.",
       });
     }
 
-    const {
-      fullName,
-      area = "",
-      interests = [],
-    } = input;
+    const { fullName, area = "", interests = [] } = input;
 
     if (
       typeof fullName !== "string" ||
@@ -128,7 +110,7 @@ function createApp({ db, firebaseAuth }) {
         (item) =>
           typeof item !== "string" ||
           item.trim().length < 1 ||
-          item.trim().length > 80
+          item.trim().length > 80,
       )
     ) {
       return res.status(400).json({
@@ -137,44 +119,34 @@ function createApp({ db, firebaseAuth }) {
     }
 
     // The ID comes from Firebase, never from the request body.
-    const reference = db
-      .collection("users")
-      .doc(req.account.uid);
+    const reference = db.collection("users").doc(req.account.uid);
 
-    const user = await db.runTransaction(
-      async (transaction) => {
-        const snapshot = await transaction.get(reference);
-        const previous = snapshot.exists
-          ? snapshot.data()
-          : {};
+    const user = await db.runTransaction(async (transaction) => {
+      const snapshot = await transaction.get(reference);
+      const previous = snapshot.exists ? snapshot.data() : {};
 
-        const profile = {
-          id: req.account.uid,
-          email: req.account.email || "",
-          fullName: fullName.trim(),
-          area: area.trim(),
-          interests: [
-            ...new Set(
-              interests.map((item) => item.trim())
-            ),
-          ],
-          joinedAt:
-            previous.joinedAt || new Date().toISOString(),
-        };
+      const profile = {
+        id: req.account.uid,
+        email: req.account.email || "",
+        fullName: fullName.trim(),
+        area: area.trim(),
+        interests: [...new Set(interests.map((item) => item.trim()))],
+        joinedAt: previous.joinedAt || new Date().toISOString(),
+      };
 
-        transaction.set(reference, profile, {
-          merge: true,
-        });
+      transaction.set(reference, profile, {
+        merge: true,
+      });
 
-        return profile;
-      }
-    );
+      return profile;
+    });
 
     res.json({ user });
   });
 
-installMessagingRoutes(app, db);
-installEventRoutes(app, db);
+  installGroupRoutes(app, db);
+  installMessagingRoutes(app, db);
+  installEventRoutes(app, db);
 
   app.use((_req, res) => {
     res.status(404).json({
@@ -195,10 +167,7 @@ installEventRoutes(app, db);
       });
     }
 
-    console.error(
-      "Request failed:",
-      error.code || error.message
-    );
+    console.error("Request failed:", error.code || error.message);
 
     res.status(500).json({
       message: "Something went wrong. Try again.",
@@ -209,22 +178,14 @@ installEventRoutes(app, db);
 }
 
 async function start() {
-  const credentialsPath =
-    process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  const credentialsPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
 
-  if (
-    !credentialsPath ||
-    !existsSync(credentialsPath)
-  ) {
-    throw new Error(
-      "Check GOOGLE_APPLICATION_CREDENTIALS in your .env file."
-    );
+  if (!credentialsPath || !existsSync(credentialsPath)) {
+    throw new Error("Check GOOGLE_APPLICATION_CREDENTIALS in your .env file.");
   }
 
   if (!process.env.FIREBASE_PROJECT_ID) {
-    throw new Error(
-      "Set FIREBASE_PROJECT_ID in your .env file."
-    );
+    throw new Error("Set FIREBASE_PROJECT_ID in your .env file.");
   }
 
   initializeApp({
@@ -244,22 +205,16 @@ async function start() {
 
   const port = Number(process.env.PORT || 3000);
 
-  const server = app.listen(
-    port,
-    "127.0.0.1",
-    () => {
-      console.log("Firestore connection OK");
-      console.log(
-        `ReIdentify backend running at http://localhost:${port}`
-      );
-    }
-  );
+  const server = app.listen(port, "127.0.0.1", () => {
+    console.log("Firestore connection OK");
+    console.log(`ReIdentify backend running at http://localhost:${port}`);
+  });
+
+  const stopGroupCleanup = startGroupCleanup(db);
+  server.on("close", stopGroupCleanup);
 
   server.on("error", (error) => {
-    console.error(
-      "Server could not listen:",
-      error.message
-    );
+    console.error("Server could not listen:", error.message);
 
     process.exit(1);
   });
@@ -267,10 +222,7 @@ async function start() {
 
 if (require.main === module) {
   start().catch((error) => {
-    console.error(
-      "Backend could not start:",
-      error.message
-    );
+    console.error("Backend could not start:", error.message);
 
     process.exit(1);
   });

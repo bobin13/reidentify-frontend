@@ -1,0 +1,52 @@
+import { useEffect, useRef, useState } from "react";
+import { StyleSheet, View } from "react-native";
+import MapView, { Marker } from "react-native-maps";
+
+type Point = { latitude: number; longitude: number };
+export default function VenueMap({
+  center,
+  pin,
+  theme,
+  onMove,
+  onPick,
+}: {
+  center: Point;
+  pin: Point | null;
+  theme: "light" | "dark";
+  onMove: (point: Point) => void;
+  onPick: (point: Point) => void;
+}) {
+  const map = useRef<MapView>(null),
+    [ready, setReady] = useState(false);
+  const initial = useRef({
+    ...center,
+    latitudeDelta: 0.02,
+    longitudeDelta: 0.02,
+  }).current;
+  useEffect(() => {
+    if (ready)
+      map.current?.animateToRegion(
+        { ...center, latitudeDelta: 0.02, longitudeDelta: 0.02 },
+        350,
+      );
+  }, [ready, center.latitude, center.longitude]);
+  return (
+    <View style={{ flex: 1 }}>
+      <MapView
+        ref={map}
+        style={StyleSheet.absoluteFillObject}
+        initialRegion={initial}
+        userInterfaceStyle={theme}
+        showsCompass
+        zoomControlEnabled
+        onMapReady={() => setReady(true)}
+        onRegionChangeComplete={(region) =>
+          onMove({ latitude: region.latitude, longitude: region.longitude })
+        }
+        onPress={(event) => onPick(event.nativeEvent.coordinate)}
+      >
+        {pin && <Marker coordinate={pin} title="Public meeting point" />}
+      </MapView>
+    </View>
+  );
+}
