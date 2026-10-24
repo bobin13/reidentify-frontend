@@ -1,5 +1,18 @@
 import { decodeHTML } from "entities";
 
+const {
+  feeds,
+}: {
+  feeds: { url: string; enabled: boolean }[];
+} = require("../../shared/news-sources.json");
+const publisherHosts = [
+  ...new Set(
+    feeds
+      .filter((source) => source.enabled)
+      .map((source) => new URL(source.url).hostname.replace(/^www\./, "")),
+  ),
+];
+
 type RecordValue = Record<string, unknown>;
 
 function record(value: unknown): RecordValue {
@@ -147,7 +160,7 @@ function publisherPage(value: string) {
       url.protocol === "https:" &&
       !url.username &&
       !url.password &&
-      ["toronto.ca", "tpl.ca", "torontopubliclibrary.ca"].some(
+      publisherHosts.some(
         (host) => url.hostname === host || url.hostname.endsWith(`.${host}`),
       )
     );

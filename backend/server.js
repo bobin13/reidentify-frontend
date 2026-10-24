@@ -1,3 +1,4 @@
+const { installNewsRoutes } = require("./news-routes");
 const { installGroupRoutes, startGroupCleanup } = require("./groups-routes");
 require("dotenv").config();
 const { installEventRoutes } = require("./events-routes");
@@ -195,12 +196,10 @@ function createApp({ db, firebaseAuth }) {
       ? resolveLocation(input.location)
       : null;
     if (changesLocation && !requestedLocation) {
-      return res
-        .status(400)
-        .json({
-          message:
-            "Choose an Ontario city and a district belonging to that city, or use the city only.",
-        });
+      return res.status(400).json({
+        message:
+          "Choose an Ontario city and a district belonging to that city, or use the city only.",
+      });
     }
 
     // The ID comes from Firebase, never from the request body.
@@ -238,6 +237,7 @@ function createApp({ db, firebaseAuth }) {
     res.json({ user });
   });
 
+  installNewsRoutes(app);
   installGroupRoutes(app, db);
   installMessagingRoutes(app, db);
   installEventRoutes(app, db);

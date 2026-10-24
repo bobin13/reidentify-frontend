@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { router, useFocusEffect } from "expo-router";
 import { SymbolView } from "expo-symbols";
-import { XMLParser } from "fast-xml-parser";
-import { decodeHTML } from "entities";
 import {
   ActivityIndicator,
   Alert,
@@ -21,239 +19,28 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { AppColors } from "../../constants/app-colors";
 import { useAppTheme } from "../../context/theme-context";
 import { useAuth } from "../../context/auth-context";
-import { articlePreviewImage, imageFromFeedItem } from "../../lib/news-images";
-
-type NewsArticle = {
-  id: string;
-  title: string;
-  summary: string;
-  url: string;
-  source: string;
-  publishedAt: number | null;
-  imageUrl: string | null;
-  stale?: boolean;
-};
-
-const NEWS_SOURCES = [
-  { name: "City of Toronto", url: "https://www.toronto.ca/news/feed/" },
-  { name: "Toronto Public Library", url: "https://www.tpl.ca/news/feed/" },
-];
+import { resolveArea, selectionForProfile } from "../../lib/locations";
+import { articlePreviewImage } from "../../lib/news-images";
+import {
+  fetchAreaNews,
+  type NewsArticle,
+  type NewsResult,
+} from "../../lib/news";
 
 const NEWS_FILTERS = [
-  "For you",
-  "All Toronto",
-  "Community",
-  "Health & safety",
-  "Culture & learning",
+  { id: "all", label: "Latest" },
+  { id: "community", label: "Community" },
+  { id: "health", label: "Health & safety" },
+  { id: "culture", label: "Culture & learning" },
 ] as const;
-type NewsFilter = (typeof NEWS_FILTERS)[number];
-
-const TOPICS: Record<string, string[]> = {
-  Community: [
-    "community",
-    "volunteer",
-    "recreation",
-    "park",
-    "garden",
-    "walking",
-    "housing",
-    "transit",
-    "accessib",
-  ],
-  "Health & safety": [
-    "health",
-    "well-being",
-    "wellbeing",
-    "caregiver",
-    "senior",
-    "older adult",
-    "safety",
-    "fire prevention",
-    "vaccin",
-  ],
-  "Culture & learning": [
-    "library",
-    "libraries",
-    "librarian",
-    "book",
-    "reading",
-    "learning",
-    "workshop",
-    "museum",
-    "music",
-    "culture",
-    "arts",
-    "festival",
-    "nuit blanche",
-  ],
+type NewsFilter = (typeof NEWS_FILTERS)[number]["id"];
+type NewsState = {
+  key: string;
+  result: NewsResult | null;
+  problem: string | null;
+  loading: boolean;
+  refreshing: boolean;
 };
-
-const INTEREST_KEYWORDS: Record<string, string[]> = {
-  "Walking & outdoors": [
-    "walk",
-    "park",
-    "garden",
-    "nature",
-    "outdoor",
-    "trail",
-  ],
-  "Learning & books": [
-    "library",
-    "libraries",
-    "librarian",
-    "book",
-    "reading",
-    "learning",
-    "workshop",
-  ],
-  Volunteering: ["volunteer", "community", "donation", "helping"],
-  "Music & culture": [
-    "music",
-    "culture",
-    "arts",
-    "museum",
-    "concert",
-    "festival",
-    "nuit blanche",
-  ],
-};
-
-const rssParser = new XMLParser({
-  ignoreAttributes: false,
-  parseTagValue: false,
-  trimValues: true,
-});
-
-function plainText(value: unknown) {
-  if (typeof value !== "string") return "";
-  return decodeHTML(value)
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
-    .replace(/<[^>]*>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function normalize(value: string) {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .trim();
-}
-
-function includesAny(text: string, words: string[]) {
-  return words.some((word) => text.includes(normalize(word)));
-}
-
-function topicScore(article: NewsArticle, interests: string[]) {
-  const text = normalize(`${article.title} ${article.summary}`);
-  const general = Object.values(TOPICS).some((words) =>
-    includesAny(text, words),
-  );
-  const interestMatch = interests.some((interest) =>
-    includesAny(text, INTEREST_KEYWORDS[interest] ?? [interest]),
-  );
-  const olderAdultMatch = includesAny(text, [
-    "senior",
-    "older adult",
-    "caregiver",
-    "retirement",
-    "accessib",
-  ]);
-  return (
-    (general ? 1 : 0) + (interestMatch ? 5 : 0) + (olderAdultMatch ? 4 : 0)
-  );
-}
-
-function areaScore(article: NewsArticle, area: string) {
-  // Toronto is already the feed's region. Boost specific neighbourhood mentions.
-  const places = area
-    .split(",")
-    .map(normalize)
-    .filter(
-      (place) =>
-        place.length >= 3 && !["toronto", "ontario", "canada"].includes(place),
-    );
-  return includesAny(normalize(`${article.title} ${article.summary}`), places)
-    ? 2
-    : 0;
-}
-
-function recentArticles(articles: NewsArticle[]) {
-  const cutoff = Date.now() - 90 * 24 * 60 * 60 * 1000;
-  const unique = new Map<string, NewsArticle>();
-  for (const article of articles) {
-    if (article.publishedAt !== null && article.publishedAt < cutoff) continue;
-    unique.set(article.id, article);
-  }
-  return [...unique.values()].sort(
-    (a, b) => (b.publishedAt ?? 0) - (a.publishedAt ?? 0),
-  );
-}
-
-async function fetchNewsSource(
-  source: (typeof NEWS_SOURCES)[number],
-  signal: AbortSignal,
-) {
-  const controller = new AbortController();
-  const cancel = () => controller.abort();
-  signal.addEventListener("abort", cancel);
-  if (signal.aborted) cancel();
-  const timeout = setTimeout(cancel, 15000);
-
-  try {
-    const response = await fetch(source.url, {
-      signal: controller.signal,
-      headers: { Accept: "application/rss+xml, application/xml, text/xml" },
-    });
-    if (!response.ok) throw new Error(`Feed returned ${response.status}`);
-    const xml = await response.text();
-    if (xml.length > 2000000) throw new Error("Feed is too large");
-
-    const feed = rssParser.parse(xml) as {
-      rss?: {
-        channel?: {
-          item?: Record<string, unknown> | Record<string, unknown>[];
-        };
-      };
-    };
-    if (!feed.rss?.channel) throw new Error("Invalid news feed");
-    const raw = feed.rss.channel.item;
-    const items = raw ? (Array.isArray(raw) ? raw : [raw]) : [];
-    const articles: NewsArticle[] = [];
-
-    for (const item of items) {
-      const title = plainText(item.title);
-      const link = typeof item.link === "string" ? item.link.trim() : "";
-      if (!title || !link.startsWith("https://")) continue;
-      let url: URL;
-      try {
-        url = new URL(link);
-      } catch {
-        continue;
-      }
-      url.hash = "";
-      const text = plainText(item.description);
-      const date = Date.parse(
-        typeof item.pubDate === "string" ? item.pubDate : "",
-      );
-      articles.push({
-        id: url.toString(),
-        title,
-        summary: text.length > 190 ? `${text.slice(0, 187).trimEnd()}…` : text,
-        url: url.toString(),
-        source: source.name,
-        publishedAt: Number.isFinite(date) ? date : null,
-        imageUrl: imageFromFeedItem(item, url.toString()),
-      });
-    }
-    return articles;
-  } finally {
-    clearTimeout(timeout);
-    signal.removeEventListener("abort", cancel);
-  }
-}
 
 async function openArticle(article: NewsArticle) {
   try {
@@ -263,22 +50,7 @@ async function openArticle(article: NewsArticle) {
   }
 }
 
-/*
-  Temporary data.
-  Later this can come from your backend/API instead.
-*/
-const featuredActivity = {
-  id: "1",
-  title: "Community Garden Morning",
-  category: "VOLUNTEERING",
-  date: "18",
-  month: "OCT",
-  time: "Friday, 10:00 am",
-  location: "Oakfield Garden",
-  distance: "0.8 miles",
-  image: require("../../../assets/images/placeholder1.jpg"),
-};
-
+// Existing group previews are retained for this Home update.
 const nearbyGroups = [
   {
     id: "1",
@@ -310,14 +82,24 @@ function NewsPhoto({ uri }: { uri: string | null | undefined }) {
 
 export default function HomeScreen() {
   const { colors, theme } = useAppTheme();
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const insets = useSafeAreaInsets();
-  const [articles, setArticles] = useState<NewsArticle[]>([]);
-  const [filter, setFilter] = useState<NewsFilter>("For you");
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [problem, setProblem] = useState<string | null>(null);
-  const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
+  const selection = user ? selectionForProfile(user) : null;
+  const location = resolveArea(selection);
+  const cityId = location?.cityId ?? null;
+  const districtId = location?.districtId ?? null;
+  const cityName = location?.city ?? null;
+  const scopeKey = `${user?.id ?? "guest"}:${cityId ?? "ontario"}:${districtId ?? ""}`;
+  const title = `${cityName || "Ontario"} news`;
+  const [state, setState] = useState<NewsState>({
+    key: scopeKey,
+    result: null,
+    problem: null,
+    loading: true,
+    refreshing: false,
+  });
+  const [filter, setFilter] = useState<NewsFilter>("all");
+  const [visibleCount, setVisibleCount] = useState(6);
   const [focused, setFocused] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [previewImages, setPreviewImages] = useState<
@@ -328,44 +110,51 @@ export default function HomeScreen() {
     () => createStyles(colors, theme === "dark"),
     [colors, theme],
   );
+  // Hide old-account/old-area results immediately, before the next effect runs.
+  const current = state.key === scopeKey ? state : null;
+  const result = current?.result ?? null;
+  const loading = authLoading || !current || current.loading;
+  const refreshing = current?.refreshing ?? false;
+  const problem = current?.problem ?? null;
 
   const loadNews = useCallback(async () => {
     request.current?.abort();
+    if (authLoading) return;
     const controller = new AbortController();
     request.current = controller;
-    setRefreshing(true);
-    setProblem(null);
-
-    const results = await Promise.allSettled(
-      NEWS_SOURCES.map((source) => fetchNewsSource(source, controller.signal)),
-    );
-    if (controller.signal.aborted) return;
-
-    const fresh: NewsArticle[] = [];
-    const failed: string[] = [];
-    results.forEach((result, index) => {
-      if (result.status === "fulfilled") fresh.push(...result.value);
-      else failed.push(NEWS_SOURCES[index].name);
-    });
-
-    setArticles((previous) =>
-      recentArticles([
-        ...previous
-          .filter((article) => failed.includes(article.source))
-          .map((article) => ({ ...article, stale: true })),
-        ...fresh,
-      ]),
-    );
-    if (failed.length < NEWS_SOURCES.length) setUpdatedAt(new Date());
-    setProblem(
-      failed.length
-        ? `Couldn't refresh ${failed.join(" and ")}. Check your connection and try again.`
-        : null,
-    );
-    setLoading(false);
-    setRefreshing(false);
-    request.current = null;
-  }, []);
+    setState((old) => ({
+      key: scopeKey,
+      result: old.key === scopeKey ? old.result : null,
+      problem: null,
+      loading: old.key !== scopeKey || !old.result,
+      refreshing: true,
+    }));
+    try {
+      const fresh = await fetchAreaNews(cityId, districtId, controller.signal);
+      if (controller.signal.aborted || request.current !== controller) return;
+      setState({
+        key: scopeKey,
+        result: fresh,
+        problem: null,
+        loading: false,
+        refreshing: false,
+      });
+    } catch (error) {
+      if (controller.signal.aborted || request.current !== controller) return;
+      setState((old) => ({
+        key: scopeKey,
+        result: old.key === scopeKey ? old.result : null,
+        problem:
+          error instanceof Error
+            ? error.message
+            : "News is unavailable. Please try again.",
+        loading: false,
+        refreshing: false,
+      }));
+    } finally {
+      if (request.current === controller) request.current = null;
+    }
+  }, [authLoading, scopeKey, cityId, districtId]);
 
   useFocusEffect(
     useCallback(() => {
@@ -379,48 +168,36 @@ export default function HomeScreen() {
     }, [loadNews]),
   );
 
-  const area = user?.area?.trim() ?? "";
-  const interests = useMemo(() => user?.interests ?? [], [user?.interests]);
-  const visibleArticles = useMemo(() => {
-    const matches = articles.filter((article) => {
-      if (filter === "All Toronto") return true;
-      if (filter === "For you")
-        return topicScore(article, interests) + areaScore(article, area) > 0;
-      return includesAny(
-        normalize(`${article.title} ${article.summary}`),
-        TOPICS[filter],
-      );
-    });
-    if (filter === "For you") {
-      matches.sort(
-        (a, b) =>
-          topicScore(b, interests) +
-            areaScore(b, area) -
-            (topicScore(a, interests) + areaScore(a, area)) ||
-          (b.publishedAt ?? 0) - (a.publishedAt ?? 0),
-      );
-    }
-    return matches;
-  }, [articles, filter, area, interests]);
+  useEffect(() => {
+    setFilter("all");
+    setVisibleCount(6);
+  }, [scopeKey]);
+  const matches = useMemo(
+    () =>
+      (result?.articles ?? []).filter(
+        (article) => filter === "all" || article.topics.includes(filter),
+      ),
+    [result, filter],
+  );
+  const visibleArticles = useMemo(
+    () => matches.slice(0, visibleCount),
+    [matches, visibleCount],
+  );
 
   useEffect(() => {
     if (!focused || loading) return;
     const controller = new AbortController();
-    // Headlines appear first. Only inspect a few missing previews at a time.
-    const targets = visibleArticles
-      .filter((article) => !article.imageUrl)
-      .slice(0, 20);
+    const targets = visibleArticles.filter((a) => !a.imageUrl).slice(0, 8);
     let cursor = 0;
     async function worker() {
       while (!controller.signal.aborted) {
         const article = targets[cursor++];
         if (!article) break;
         const image = await articlePreviewImage(article.url, controller.signal);
-        if (!controller.signal.aborted) {
+        if (!controller.signal.aborted)
           setPreviewImages((old) =>
             old[article.url] === image ? old : { ...old, [article.url]: image },
           );
-        }
       }
     }
     void Promise.all([worker(), worker()]);
@@ -432,9 +209,7 @@ export default function HomeScreen() {
   const greeting =
     hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
   const name = user?.fullName.trim().split(/\s+/)[0] || "neighbour";
-  const outsideToronto =
-    area !== "" &&
-    !/\b(toronto|etobicoke|scarborough|north york|east york)\b/i.test(area);
+  const updatedAt = result?.checkedAt ? new Date(result.checkedAt) : null;
 
   return (
     <View style={styles.safeArea}>
@@ -501,11 +276,11 @@ export default function HomeScreen() {
         <View style={styles.newsSection}>
           <View style={styles.newsHeading}>
             <Text accessibilityRole="header" style={styles.sectionTitle}>
-              Local news
+              {title}
             </Text>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Refresh local news"
+              accessibilityLabel={`Refresh ${title}`}
               accessibilityState={{ disabled: refreshing }}
               disabled={refreshing}
               onPress={() => void loadNews()}
@@ -517,22 +292,28 @@ export default function HomeScreen() {
             </Pressable>
           </View>
           <Text style={styles.newsDescription}>
-            Toronto updates about community life, health, learning and culture.
+            {cityName
+              ? `Updates from ${cityName} and the surrounding area.`
+              : "Updates from across Ontario."}
           </Text>
-          {outsideToronto && (
-            <Text style={styles.newsDescription}>
-              Your profile area is {area}. These sources currently cover
-              Toronto.
-            </Text>
+          {!cityName && !authLoading && (
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => router.push("/profile")}
+              style={styles.locationPrompt}
+            >
+              <Text style={styles.newsDescription}>
+                {user
+                  ? "Add your city in Profile for news from your area."
+                  : "Sign in and add your city for news from your area."}
+              </Text>
+              <Text style={styles.sectionLink}>Open Profile →</Text>
+            </Pressable>
           )}
-          {filter === "For you" && (
+          {cityName && result?.coverage === "ontario-only" && (
             <Text style={styles.newsDescription}>
-              Prioritized by community topics
-              {interests.length ? " and your interests" : ""}
-              {area && !outsideToronto
-                ? `, with a boost for mentions of ${area}`
-                : ""}
-              .
+              Updates for your area aren't available right now. Here is the
+              latest Ontario news.
             </Text>
           )}
 
@@ -543,23 +324,26 @@ export default function HomeScreen() {
           >
             {NEWS_FILTERS.map((option) => (
               <Pressable
-                key={option}
+                key={option.id}
                 accessibilityRole="button"
-                accessibilityLabel={option}
-                accessibilityState={{ selected: filter === option }}
-                onPress={() => setFilter(option)}
+                accessibilityLabel={option.label}
+                accessibilityState={{ selected: filter === option.id }}
+                onPress={() => {
+                  setFilter(option.id);
+                  setVisibleCount(6);
+                }}
                 style={[
                   styles.filterChip,
-                  filter === option && styles.selectedChip,
+                  filter === option.id && styles.selectedChip,
                 ]}
               >
                 <Text
                   style={[
                     styles.filterText,
-                    filter === option && styles.selectedFilterText,
+                    filter === option.id && styles.selectedFilterText,
                   ]}
                 >
-                  {option}
+                  {option.label}
                 </Text>
               </Pressable>
             ))}
@@ -568,16 +352,18 @@ export default function HomeScreen() {
           {loading && (
             <View style={styles.newsState}>
               <ActivityIndicator color={colors.accent} />
-              <Text style={styles.newsDescription}>Loading local news…</Text>
+              <Text style={styles.newsDescription}>Loading {title}…</Text>
             </View>
           )}
 
-          {problem && (
+          {(problem || result?.notice) && (
             <View accessibilityLiveRegion="polite" style={styles.newsState}>
               <Text style={styles.newsStateTitle}>
                 Some news is unavailable
               </Text>
-              <Text style={styles.newsDescription}>{problem}</Text>
+              <Text style={styles.newsDescription}>
+                {problem || result?.notice}
+              </Text>
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel="Retry news"
@@ -611,7 +397,10 @@ export default function HomeScreen() {
                   }
                   uri={article.imageUrl || previewImages[article.url]}
                 />
-                <Text style={styles.newsSource}>{article.source}</Text>
+                <View style={styles.newsMeta}>
+                  <Text style={styles.newsSource}>{article.source}</Text>
+                  <Text style={styles.newsArea}>{article.areaLabel}</Text>
+                </View>
                 <Text style={styles.newsTitle}>{article.title}</Text>
                 {!!article.summary && (
                   <Text style={styles.newsSummary}>{article.summary}</Text>
@@ -637,30 +426,42 @@ export default function HomeScreen() {
 
           {!loading &&
             !visibleArticles.length &&
-            !(problem && !articles.length) && (
+            !(problem && !result?.articles.length) && (
               <View style={styles.newsState}>
                 <Text style={styles.newsStateTitle}>
                   No matching news right now
                 </Text>
                 <Text style={styles.newsDescription}>
-                  {articles.length
-                    ? "Try All Toronto to see the other recent updates."
+                  {result?.articles.length
+                    ? "Try Latest to see the other recent updates."
                     : "The feeds have no recent articles available. Try refreshing later."}
                 </Text>
-                {filter !== "All Toronto" && (
+                {filter !== "all" && (
                   <Pressable
                     accessibilityRole="button"
-                    accessibilityLabel="Show all Toronto news"
-                    onPress={() => setFilter("All Toronto")}
+                    accessibilityLabel="Show latest news"
+                    onPress={() => {
+                      setFilter("all");
+                      setVisibleCount(6);
+                    }}
                     style={styles.retryButton}
                   >
                     <Text style={styles.selectedFilterText}>
-                      Show all Toronto news
+                      Show latest news
                     </Text>
                   </Pressable>
                 )}
               </View>
             )}
+          {!loading && matches.length > visibleCount && (
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => setVisibleCount((count) => count + 6)}
+              style={styles.moreNewsButton}
+            >
+              <Text style={styles.sectionLink}>Show more news</Text>
+            </Pressable>
+          )}
           {updatedAt && (
             <Text style={styles.newsDate}>
               Last checked{" "}
@@ -668,69 +469,10 @@ export default function HomeScreen() {
                 hour: "numeric",
                 minute: "2-digit",
               })}{" "}
-              · Articles from the past 90 days
+              · Articles from the past 30 days
             </Text>
           )}
         </View>
-
-        {/* HAPPENING SOON — EXISTING ACTIVITY PREVIEW */}
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Happening soon</Text>
-
-          <Pressable>
-            <Text style={styles.sectionLink}>See all</Text>
-          </Pressable>
-        </View>
-
-        <Pressable style={styles.featuredCard}>
-          <Image source={featuredActivity.image} style={styles.featuredImage} />
-
-          <View style={styles.dateBadge}>
-            <Text style={styles.dateNumber}>{featuredActivity.date}</Text>
-
-            <Text style={styles.dateMonth}>{featuredActivity.month}</Text>
-          </View>
-
-          <View style={styles.featuredBody}>
-            <View style={styles.categoryBadge}>
-              <Text style={styles.categoryText}>
-                {featuredActivity.category}
-              </Text>
-            </View>
-
-            <Text style={styles.featuredTitle}>{featuredActivity.title}</Text>
-
-            <View style={styles.infoRow}>
-              <SymbolView
-                name={{
-                  ios: "clock",
-                  android: "schedule",
-                  web: "schedule",
-                }}
-                size={17}
-                tintColor={colors.muted}
-              />
-
-              <Text style={styles.infoText}>{featuredActivity.time}</Text>
-            </View>
-
-            <View style={styles.infoRow}>
-              <SymbolView
-                name={{
-                  ios: "location",
-                  android: "location_on",
-                  web: "location_on",
-                }}
-                size={17}
-                tintColor={colors.muted}
-              />
-
-              <Text style={styles.infoText}>
-                {featuredActivity.location} · {featuredActivity.distance}
-              </Text>
-            </View>
-          </View>
-        </Pressable>
 
         {/* GROUPS NEAR YOU */}
         <View style={styles.sectionHeader}>
@@ -814,6 +556,32 @@ export default function HomeScreen() {
 
 function createStyles(colors: AppColors, isDark: boolean) {
   return StyleSheet.create({
+    locationPrompt: {
+      minHeight: 48,
+      padding: 14,
+      gap: 8,
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: colors.border,
+      backgroundColor: colors.surface,
+    },
+    moreNewsButton: {
+      minHeight: 48,
+      alignItems: "center",
+      justifyContent: "center",
+      padding: 12,
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    newsMeta: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      justifyContent: "space-between",
+      alignItems: "center",
+      gap: 8,
+    },
+    newsArea: { color: colors.muted, fontSize: 12, lineHeight: 18 },
     newsSection: { gap: 12, marginBottom: 28 },
     newsHeading: {
       flexDirection: "row",
@@ -1013,91 +781,6 @@ function createStyles(colors: AppColors, isDark: boolean) {
       color: colors.accent,
       fontSize: 14,
       fontWeight: "700",
-    },
-
-    featuredCard: {
-      backgroundColor: colors.surface,
-      borderRadius: 18,
-      borderWidth: 1,
-      borderColor: colors.border,
-      overflow: "hidden",
-      marginBottom: 28,
-    },
-
-    featuredImage: {
-      width: "100%",
-      height: 190,
-      resizeMode: "cover",
-    },
-
-    dateBadge: {
-      position: "absolute",
-      top: 155,
-      left: 15,
-      width: 58,
-      height: 58,
-      borderRadius: 14,
-      backgroundColor: colors.surface,
-      borderWidth: 1,
-      borderColor: colors.border,
-      alignItems: "center",
-      justifyContent: "center",
-      elevation: 4,
-    },
-
-    dateNumber: {
-      color: colors.text,
-      fontSize: 21,
-      fontWeight: "800",
-    },
-
-    dateMonth: {
-      color: isDark ? "#E87561" : "#AD4D3C",
-      fontSize: 10,
-      fontWeight: "800",
-    },
-
-    featuredBody: {
-      paddingHorizontal: 18,
-      paddingTop: 25,
-      paddingBottom: 18,
-    },
-
-    categoryBadge: {
-      alignSelf: "flex-start",
-      backgroundColor: isDark ? "#173129" : "#E5F3EB",
-      borderRadius: 6,
-      paddingHorizontal: 10,
-      paddingVertical: 5,
-      marginBottom: 8,
-    },
-
-    categoryText: {
-      color: colors.accent,
-      fontSize: 10,
-      fontWeight: "800",
-      letterSpacing: 0.6,
-    },
-
-    featuredTitle: {
-      color: colors.text,
-      fontSize: 23,
-      lineHeight: 27,
-      fontWeight: "700",
-      fontFamily: "serif",
-      marginBottom: 14,
-    },
-
-    infoRow: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 7,
-      marginTop: 6,
-    },
-
-    infoText: {
-      color: colors.muted,
-      fontSize: 13,
     },
 
     groupsRow: {
