@@ -8,7 +8,7 @@ export default function TabLayout() {
 
   return (
     <Tabs
-      initialRouteName="feed"
+      initialRouteName="home"
       screenOptions={{
         headerShown: false,
         tabBarHideOnKeyboard: true,
@@ -27,25 +27,6 @@ export default function TabLayout() {
         },
       }}
     >
-      <Tabs.Screen
-        name="feed"
-        options={{
-          title: "Feed",
-          tabBarIcon: ({ color, focused }) => (
-            <SymbolView
-              name={{
-                ios: focused ? "house.fill" : "house",
-                android: "home",
-                web: "home",
-              }}
-              size={22}
-              tintColor={color}
-              weight={focused ? "semibold" : "regular"}
-            />
-          ),
-        }}
-      />
-
       <Tabs.Screen
         name="home"
         options={{
