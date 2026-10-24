@@ -28,6 +28,8 @@ const API_URL = (
   process.env.EXPO_PUBLIC_API_URL || "http://localhost:3000"
 ).replace(/\/$/, "");
 
+class NewsResponseError extends Error {}
+
 export async function fetchAreaNews(
   cityId: string | null,
   districtId: string | null,
@@ -47,27 +49,20 @@ export async function fetchAreaNews(
     });
     const data = await response.json();
     if (!response.ok)
-      throw new Error(
+      throw new NewsResponseError(
         typeof data?.message === "string"
           ? data.message
           : "News is unavailable. Please try again.",
       );
     if (!data || !Array.isArray(data.articles))
-      throw new Error("News is unavailable. Please try again.");
+      throw new NewsResponseError("News is unavailable. Please try again.");
     return data as NewsResult;
   } catch (error) {
     if (signal.aborted) throw error;
     if (controller.signal.aborted)
       throw new Error("News took too long to load. Please try again.");
-    if (
-      error instanceof Error &&
-      error.name !== "TypeError" &&
-      error.name !== "SyntaxError"
-    )
-      throw error;
-    throw new Error(
-      "Cannot load news. Check that the ReIdentify backend is running and try again.",
-    );
+    if (error instanceof NewsResponseError) throw error;
+    throw new Error("News is temporarily unavailable. Please try again.");
   } finally {
     clearTimeout(timer);
     signal.removeEventListener("abort", cancel);

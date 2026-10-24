@@ -299,10 +299,10 @@ function compileNews(city, district, results, now) {
           article.categories,
         ) || /\/(?:world|national|international)\//i.test(article.url);
       if (!result.source.provinceWide && outside && !local) continue;
-      const scope = result.source.provinceWide
-        ? "ontario"
-        : local
-          ? "local"
+      const scope = local
+        ? "local"
+        : result.source.provinceWide
+          ? "ontario"
           : "regional";
       const { searchText, categories, ...card } = article;
       articles.push({
@@ -323,7 +323,14 @@ function compileNews(city, district, results, now) {
       });
     }
   }
-  articles.sort((a, b) => b.rank - a.rank || b.publishedAt - a.publishedAt);
+  // Prefer supplied article photos; retain area and date ordering within each group.
+  // This also keeps an illustrated copy when multiple feeds repeat a story.
+  articles.sort(
+    (a, b) =>
+      Number(!!b.imageUrl) - Number(!!a.imageUrl) ||
+      b.rank - a.rank ||
+      b.publishedAt - a.publishedAt,
+  );
   const seenUrls = new Set(),
     seenTitles = new Set();
   const unique = [];
@@ -344,7 +351,10 @@ function compileNews(city, district, results, now) {
     cityId: city?.id || null,
     district: district?.name || null,
     coverage: regional.length ? "local-and-regional" : "ontario-only",
-    articles: [...regional.slice(0, 24), ...provincial.slice(0, city ? 6 : 18)],
+    articles: [
+      ...regional.slice(0, 24),
+      ...provincial.slice(0, city ? 6 : 18),
+    ].sort((a, b) => Number(!!b.imageUrl) - Number(!!a.imageUrl)),
     checkedAt: results.some((r) => r.checkedAt)
       ? new Date(
           Math.max(...results.map((r) => r.checkedAt || 0)),

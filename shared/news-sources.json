@@ -79,6 +79,7 @@
     {"id": "your-thunder-bay", "name": "Your Thunder Bay", "url": "https://yourthunderbay.ca/feed/", "area": "Thunder Bay / northwestern Ontario", "cityIds": ["on-58004", "on-58007", "on-58028", "on-58001", "on-58019", "on-58012", "on-58016", "on-58034"], "regions": [], "provinceWide": false, "enabled": true},
     {"id": "fort-frances-times", "name": "Fort Frances Times", "url": "https://fftimes.com/feed/", "area": "Fort Frances / Rainy River District", "cityIds": ["on-59012", "on-59042", "on-59019", "on-59011", "on-59024", "on-59040", "on-59016", "on-59031", "on-59001"], "regions": [], "provinceWide": false, "enabled": true},
     {"id": "netnewsledger-thunder-bay", "name": "NetNewsLedger Thunder Bay", "url": "https://www.netnewsledger.com/feed/", "area": "Thunder Bay / northwestern Ontario; mixed broader coverage", "cityIds": ["on-58004", "on-58044", "on-58041", "on-58058", "on-58059", "on-58054", "on-58051", "on-58066"], "regions": [], "provinceWide": false, "enabled": true},
-    {"id": "ontario-all-news", "name": "Ontario Newsroom", "url": "https://news.ontario.ca/newsroom/en/rss/allnews.rss", "area": "Ontario-wide government announcements", "cityIds": [], "regions": [], "provinceWide": true, "enabled": true}
+    {"id": "ontario-all-news", "name": "Ontario Newsroom", "url": "https://news.ontario.ca/newsroom/en/rss/allnews.rss", "area": "Ontario-wide government announcements", "cityIds": [], "regions": [], "provinceWide": true, "enabled": true},
+    {"id": "global-ontario-politics", "name": "Global News — Ontario politics", "url": "https://globalnews.ca/tag/ontario-politics/feed/", "area": "Ontario / provincial policy, health, education and politics", "cityIds": [], "regions": [], "provinceWide": true, "enabled": true}
   ]
 }

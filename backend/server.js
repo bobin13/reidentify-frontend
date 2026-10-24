@@ -2,6 +2,7 @@ const { installNewsRoutes } = require("./news-routes");
 const { installGroupRoutes, startGroupCleanup } = require("./groups-routes");
 require("dotenv").config();
 const { installEventRoutes } = require("./events-routes");
+const { startExternalEventSync } = require("./external-events");
 const { installMessagingRoutes } = require("./messages-routes");
 const express = require("express");
 const { existsSync } = require("node:fs");
@@ -306,6 +307,8 @@ async function start() {
 
   const stopGroupCleanup = startGroupCleanup(db);
   server.on("close", stopGroupCleanup);
+    const stopExternalEvents = startExternalEventSync(db);
+    server.on("close", stopExternalEvents);
 
   server.on("error", (error) => {
     console.error("Server could not listen:", error.message);

@@ -174,9 +174,11 @@ export default function HomeScreen() {
   }, [scopeKey]);
   const matches = useMemo(
     () =>
-      (result?.articles ?? []).filter(
-        (article) => filter === "all" || article.topics.includes(filter),
-      ),
+      (result?.articles ?? [])
+        .filter(
+          (article) => filter === "all" || article.topics.includes(filter),
+        )
+        .sort((a, b) => Number(!!b.imageUrl) - Number(!!a.imageUrl)),
     [result, filter],
   );
   const visibleArticles = useMemo(
@@ -274,10 +276,17 @@ export default function HomeScreen() {
 
         {/* LIVE LOCAL NEWS */}
         <View style={styles.newsSection}>
-          <View style={styles.newsHeading}>
-            <Text accessibilityRole="header" style={styles.sectionTitle}>
-              {title}
-            </Text>
+          <View
+            style={[
+              styles.newsHeading,
+              !cityName && styles.newsHeadingWithoutTitle,
+            ]}
+          >
+            {cityName && (
+              <Text accessibilityRole="header" style={styles.sectionTitle}>
+                {title}
+              </Text>
+            )}
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={`Refresh ${title}`}
@@ -296,20 +305,6 @@ export default function HomeScreen() {
               ? `Updates from ${cityName} and the surrounding area.`
               : "Updates from across Ontario."}
           </Text>
-          {!cityName && !authLoading && (
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => router.push("/profile")}
-              style={styles.locationPrompt}
-            >
-              <Text style={styles.newsDescription}>
-                {user
-                  ? "Add your city in Profile for news from your area."
-                  : "Sign in and add your city for news from your area."}
-              </Text>
-              <Text style={styles.sectionLink}>Open Profile →</Text>
-            </Pressable>
-          )}
           {cityName && result?.coverage === "ontario-only" && (
             <Text style={styles.newsDescription}>
               Updates for your area aren't available right now. Here is the
@@ -556,15 +551,6 @@ export default function HomeScreen() {
 
 function createStyles(colors: AppColors, isDark: boolean) {
   return StyleSheet.create({
-    locationPrompt: {
-      minHeight: 48,
-      padding: 14,
-      gap: 8,
-      borderRadius: 12,
-      borderWidth: 1,
-      borderColor: colors.border,
-      backgroundColor: colors.surface,
-    },
     moreNewsButton: {
       minHeight: 48,
       alignItems: "center",
@@ -590,6 +576,7 @@ function createStyles(colors: AppColors, isDark: boolean) {
       flexWrap: "wrap",
       gap: 8,
     },
+    newsHeadingWithoutTitle: { justifyContent: "flex-end" },
     refreshButton: {
       minHeight: 44,
       justifyContent: "center",
