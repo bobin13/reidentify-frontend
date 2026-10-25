@@ -1,20 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { router, useFocusEffect } from "expo-router";
+import { SymbolView } from "expo-symbols";
 import * as Location from "expo-location";
 import {
   ActivityIndicator,
   AppState,
   Linking,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import EventMap from "../../components/event-map";
-import { AreaField } from "../../components/area-field";
 import type { AppColors } from "../../constants/app-colors";
 import { useAuth } from "../../context/auth-context";
 import { useAppTheme } from "../../context/theme-context";
@@ -38,7 +38,7 @@ import {
 } from "../../lib/map-events";
 
 const DEFAULT_AREA: AreaSelection = { cityId: "on-20002", districtId: null };
-const RADII = [2, 5, 10, 25];
+const RADII = [0.5, 2, 10];
 
 function areaFor(selection: AreaSelection | null) {
   return resolveArea(selection) || resolveArea(DEFAULT_AREA)!;
@@ -48,6 +48,9 @@ export default function MapScreen() {
   const { colors, theme } = useAppTheme();
   const { user } = useAuth();
   const insets = useSafeAreaInsets();
+  const { width, height, fontScale } = useWindowDimensions();
+  const compactLocation = width < 380 || fontScale > 1.15;
+  const mapHeight = Math.max(400, Math.round((height - insets.bottom) * 0.68));
   const styles = useMemo(() => createStyles(colors), [colors]);
   const profileSelection = user ? selectionForProfile(user) : null;
   const profileKey = [
@@ -56,13 +59,7 @@ export default function MapScreen() {
     profileSelection?.districtId || "",
   ].join("|");
   const initial = areaFor(profileSelection);
-  const [selection, setSelection] = useState<AreaSelection | null>(
-    profileSelection || DEFAULT_AREA,
-  );
   const [center, setCenter] = useState<Coordinates>(initial.coordinate);
-  const [areaName, setAreaName] = useState(
-    [initial.district, initial.city].filter(Boolean).join(", "),
-  );
   const [radiusKm, setRadiusKm] = useState(10);
   const [useInterests, setUseInterests] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -103,17 +100,11 @@ export default function MapScreen() {
     (source) => !source.ready && !source.refreshing,
   );
 
-  function chooseCenter(
-    coordinate: Coordinates,
-    name: string,
-    nextSelection: AreaSelection | null,
-  ) {
+  function chooseCenter(coordinate: Coordinates) {
     locationRequest.current++;
     setLocating(false);
     setCenter({ ...coordinate });
     pendingCenter.current = coordinate;
-    setAreaName(name);
-    setSelection(nextSelection);
     setMapMoved(false);
     setSelectedId(null);
     setLocationIssue("");
@@ -125,11 +116,7 @@ export default function MapScreen() {
   useEffect(() => {
     const nextSelection = user ? selectionForProfile(user) : null;
     const area = areaFor(nextSelection);
-    chooseCenter(
-      area.coordinate,
-      [area.district, area.city].filter(Boolean).join(", "),
-      nextSelection || DEFAULT_AREA,
-    );
+    chooseCenter(area.coordinate);
     setUseInterests(false);
     setLocationPermission(false);
     // Profile changes reset the search; manual panning does not change the profile.
@@ -234,7 +221,7 @@ export default function MapScreen() {
       setLocationPermission(permission.granted);
       if (!permission.granted) {
         setLocationIssue(
-          "Location permission wasn't granted. You can choose an area instead.",
+          "Location permission wasn't granted. You can move the map to explore.",
         );
         setShowSettings(!permission.canAskAgain);
         return;
@@ -242,7 +229,7 @@ export default function MapScreen() {
       if (!(await Location.hasServicesEnabledAsync())) {
         if (isCurrent())
           setLocationIssue(
-            "Turn on location services, or choose an area instead.",
+            "Turn on location services to use your current location.",
           );
         return;
       }
@@ -269,11 +256,11 @@ export default function MapScreen() {
         Math.abs(coordinate.longitude) > 180
       )
         throw new Error();
-      chooseCenter(coordinate, "your current location", null);
+      chooseCenter(coordinate);
     } catch {
       if (isCurrent())
         setLocationIssue(
-          "We couldn't get your location. Try again, or choose an area below.",
+          "We couldn't get your location. Try again, or move the map to explore.",
         );
     } finally {
       if (timeout) clearTimeout(timeout);
@@ -296,81 +283,69 @@ export default function MapScreen() {
         </View>
         <Text style={styles.brand}>ReIdentify</Text>
       </View>
-      <Text accessibilityRole="header" style={styles.title}>
-        Nearby activities
-      </Text>
-      <Text style={styles.subtitle}>
-        Find something to enjoy, somewhere near you.
-      </Text>
-      <AreaField
-        value={selection}
-        onChange={(value) => {
-          const area = resolveArea(value);
-          if (area)
-            chooseCenter(
-              area.coordinate,
-              [area.district, area.city].filter(Boolean).join(", "),
-              value,
-            );
-        }}
-      />
-      <View style={styles.row}>
+      <View style={styles.toolbar}>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Use my location"
           accessibilityState={{ disabled: locating }}
           disabled={locating}
           onPress={() => void useCurrentLocation()}
-          style={styles.primaryButton}
+          style={[styles.locationButton, locating && styles.disabled]}
         >
-          {locating && <ActivityIndicator color={colors.background} />}
-          <Text style={styles.primaryText}>
-            {locating ? "Finding location…" : "Use my location"}
-          </Text>
-        </Pressable>
-        {!!profileSelection && (
-          <Pressable
-            accessibilityRole="button"
-            style={styles.outlineButton}
-            onPress={() => {
-              const area = areaFor(profileSelection);
-              chooseCenter(
-                area.coordinate,
-                [area.district, area.city].filter(Boolean).join(", "),
-                profileSelection,
-              );
-            }}
-          >
-            <Text style={styles.link}>My saved area</Text>
-          </Pressable>
-        )}
-      </View>
-      {!!locationIssue && (
-        <View style={styles.notice}>
-          <Text accessibilityRole="alert" style={styles.body}>
-            {locationIssue}
-          </Text>
-          {showSettings && (
-            <Pressable
-              accessibilityRole="button"
-              style={styles.textButton}
-              onPress={() =>
-                void Linking.openSettings().catch(() =>
-                  setLocationIssue(
-                    "Open your phone's settings to allow location access.",
-                  ),
-                )
-              }
-            >
-              <Text style={styles.link}>Open settings</Text>
-            </Pressable>
+          {locating ? (
+            <ActivityIndicator color={colors.background} />
+          ) : (
+            <SymbolView
+              name={{
+                ios: "location.fill",
+                android: "my_location",
+                web: "my_location",
+              }}
+              size={18}
+              tintColor={colors.background}
+            />
           )}
+          {!compactLocation && (
+            <Text style={styles.locationText}>
+              {locating ? "Locating…" : "My location"}
+            </Text>
+          )}
+        </Pressable>
+        <View
+          style={styles.distancePicker}
+          accessibilityLabel="Distance from the map centre"
+        >
+          {RADII.map((radius) => (
+            <Pressable
+              key={radius}
+              accessibilityRole="button"
+              accessibilityLabel={
+                radius < 1
+                  ? "Within 500 metres"
+                  : "Within " + radius + " kilometres"
+              }
+              accessibilityState={{ selected: radiusKm === radius }}
+              style={[
+                styles.distanceOption,
+                radiusKm === radius && styles.activeChip,
+              ]}
+              onPress={() => {
+                setRadiusKm(radius);
+                setPlacesShown(8);
+                setMapMoved(false);
+              }}
+            >
+              <Text
+                style={[
+                  styles.distanceText,
+                  radiusKm === radius && styles.activeText,
+                ]}
+              >
+                {radius < 1 ? "500 m" : radius + " km"}
+              </Text>
+            </Pressable>
+          ))}
         </View>
-      )}
-      <View style={styles.headingRow}>
-        <Text style={[styles.label, styles.flex]}>
-          Searching near {areaName}
-        </Text>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Refresh nearby activities"
@@ -382,38 +357,7 @@ export default function MapScreen() {
           <Text style={styles.link}>{loading ? "Loading…" : "Refresh"}</Text>
         </Pressable>
       </View>
-      {!!error && (
-        <View style={styles.notice}>
-          <Text accessibilityRole="alert" style={styles.body}>
-            {error}
-          </Text>
-          {!!data.events.length && (
-            <Text style={styles.help}>
-              Previously loaded activities are shown below.
-            </Text>
-          )}
-        </View>
-      )}
-      {preparing && (
-        <Text accessibilityLiveRegion="polite" style={styles.help}>
-          Community calendars are being prepared. This page will update
-          automatically.
-        </Text>
-      )}
-      {!!savedSources.length && (
-        <Text style={styles.help}>
-          Saved listings from{" "}
-          {savedSources.map((source) => source.name).join(", ")} are shown while
-          updates are unavailable.
-        </Text>
-      )}
-      {!!unavailable.length && (
-        <Text style={styles.help}>
-          {unavailable.map((source) => source.name).join(", ")} listings are
-          temporarily unavailable.
-        </Text>
-      )}
-      <View style={styles.mapFrame}>
+      <View style={[styles.mapFrame, { height: mapHeight }]}>
         <EventMap
           center={center}
           radiusKm={radiusKm}
@@ -430,49 +374,83 @@ export default function MapScreen() {
             accessibilityRole="button"
             accessibilityLabel="Search this map area"
             style={styles.searchAreaButton}
-            onPress={() =>
-              chooseCenter(pendingCenter.current, "the selected map area", null)
-            }
+            onPress={() => chooseCenter(pendingCenter.current)}
           >
             <Text style={styles.link}>Search this area</Text>
           </Pressable>
         )}
       </View>
-      <Text style={styles.help}>
-        One pin per venue. Tap a pin to see activities and upcoming dates.
-        {Platform.OS !== "web"
-          ? " Move the map, then tap Search this area to explore."
-          : ""}
-      </Text>
+      {(locationIssue ||
+        error ||
+        preparing ||
+        savedSources.length > 0 ||
+        unavailable.length > 0) && (
+        <View style={styles.statusArea}>
+          {!!locationIssue && (
+            <View style={styles.statusRow}>
+              <Text accessibilityRole="alert" style={styles.statusText}>
+                {locationIssue}
+              </Text>
+              {showSettings && (
+                <Pressable
+                  accessibilityRole="button"
+                  style={styles.textButton}
+                  onPress={() =>
+                    void Linking.openSettings().catch(() =>
+                      setLocationIssue(
+                        "Open your phone's settings to allow location access.",
+                      ),
+                    )
+                  }
+                >
+                  <Text style={styles.link}>Settings</Text>
+                </Pressable>
+              )}
+            </View>
+          )}
+          {!!error && (
+            <View style={styles.statusRow}>
+              <Text accessibilityRole="alert" style={styles.statusText}>
+                Activity updates: {error}
+              </Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Retry activity updates"
+                accessibilityState={{ disabled: loading }}
+                disabled={loading}
+                style={styles.textButton}
+                onPress={() => setReload((n) => n + 1)}
+              >
+                <Text style={styles.link}>Retry</Text>
+              </Pressable>
+            </View>
+          )}
+          {!!error && venues.length > 0 && (
+            <Text style={styles.help}>Showing saved activities.</Text>
+          )}
+          {preparing && (
+            <Text accessibilityLiveRegion="polite" style={styles.help}>
+              Community calendars are being prepared. Activities will appear
+              automatically.
+            </Text>
+          )}
+          {!!savedSources.length && (
+            <Text style={styles.help}>
+              Showing saved listings from{" "}
+              {savedSources.map((source) => source.name).join(", ")}.
+            </Text>
+          )}
+          {!!unavailable.length && (
+            <Text style={styles.help}>
+              {unavailable.map((source) => source.name).join(", ")} listings are
+              temporarily unavailable.
+            </Text>
+          )}
+        </View>
+      )}
       {selected && (
         <VenueSchedule key={selected.id} venue={selected} styles={styles} />
       )}
-      <Text style={styles.label}>Distance</Text>
-      <View style={styles.row}>
-        {RADII.map((radius) => (
-          <Pressable
-            key={radius}
-            accessibilityRole="button"
-            accessibilityLabel={"Within " + radius + " kilometres"}
-            accessibilityState={{ selected: radiusKm === radius }}
-            style={[styles.chip, radiusKm === radius && styles.activeChip]}
-            onPress={() => {
-              setRadiusKm(radius);
-              setPlacesShown(8);
-              setMapMoved(false);
-            }}
-          >
-            <Text
-              style={[
-                styles.chipText,
-                radiusKm === radius && styles.activeText,
-              ]}
-            >
-              {radius} km
-            </Text>
-          </Pressable>
-        ))}
-      </View>
       <View style={styles.row}>
         <Pressable
           accessibilityRole="button"
@@ -514,7 +492,7 @@ export default function MapScreen() {
       )}
       <Text accessibilityRole="header" style={styles.sectionTitle}>
         {venues.length} {venues.length === 1 ? "place" : "places"} within{" "}
-        {radiusKm} km
+        {radiusKm < 1 ? "500 m" : radiusKm + " km"}
       </Text>
       <Text style={styles.help}>
         Upcoming activities for the next 31 days. Distances are straight-line
@@ -543,11 +521,11 @@ export default function MapScreen() {
             accessibilityRole="button"
             style={styles.textButton}
             onPress={() => {
-              setRadiusKm(25);
+              setRadiusKm(10);
               setUseInterests(false);
             }}
           >
-            <Text style={styles.link}>Show all activities within 25 km</Text>
+            <Text style={styles.link}>Show all activities within 10 km</Text>
           </Pressable>
         </View>
       )}
@@ -743,10 +721,9 @@ function ActivitySchedule({
 function createStyles(colors: AppColors) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
-    content: { paddingHorizontal: 20, gap: 14 },
-    flex: { flex: 1 },
+    content: { paddingHorizontal: 20, gap: 10 },
     header: {
-      minHeight: 72,
+      minHeight: 64,
       flexDirection: "row",
       alignItems: "center",
       gap: 10,
@@ -768,26 +745,53 @@ function createStyles(colors: AppColors) {
       fontFamily: "serif",
     },
     brand: { color: colors.text, fontSize: 19, fontWeight: "700" },
-    title: { color: colors.text, fontSize: 26, fontWeight: "700" },
-    subtitle: { color: colors.muted, fontSize: 16, lineHeight: 24 },
     row: {
       flexDirection: "row",
       flexWrap: "wrap",
       gap: 8,
       alignItems: "center",
     },
-    headingRow: { flexDirection: "row", gap: 12, alignItems: "center" },
-    primaryButton: {
-      minHeight: 48,
-      paddingHorizontal: 16,
-      paddingVertical: 12,
-      borderRadius: 12,
+    toolbar: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      justifyContent: "space-between",
+      alignItems: "center",
+      gap: 8,
+    },
+    locationButton: {
+      minHeight: 44,
+      minWidth: 44,
+      justifyContent: "center",
+      paddingHorizontal: 10,
+      paddingVertical: 8,
+      borderRadius: 22,
       backgroundColor: colors.accent,
       flexDirection: "row",
-      gap: 8,
+      gap: 6,
       alignItems: "center",
     },
-    primaryText: { color: colors.background, fontSize: 16, fontWeight: "700" },
+    locationText: { color: colors.background, fontSize: 13, fontWeight: "700" },
+    distancePicker: {
+      flexDirection: "row",
+      padding: 2,
+      gap: 2,
+      borderRadius: 14,
+      borderWidth: 1,
+      borderColor: colors.border,
+      backgroundColor: colors.surface,
+    },
+    distanceOption: {
+      minWidth: 44,
+      minHeight: 44,
+      paddingHorizontal: 6,
+      borderRadius: 11,
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    distanceText: { color: colors.text, fontSize: 13, fontWeight: "700" },
+    statusArea: { gap: 4, paddingHorizontal: 2 },
+    statusRow: { flexDirection: "row", alignItems: "center", gap: 12 },
+    statusText: { flex: 1, color: colors.muted, fontSize: 14, lineHeight: 21 },
     outlineButton: {
       minHeight: 48,
       paddingHorizontal: 14,
@@ -827,7 +831,6 @@ function createStyles(colors: AppColors) {
       borderColor: colors.border,
     },
     mapFrame: {
-      height: 460,
       borderRadius: 18,
       overflow: "hidden",
       borderWidth: 1,

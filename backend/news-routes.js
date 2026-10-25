@@ -1,5 +1,6 @@
 const { XMLParser, XMLValidator } = require("fast-xml-parser");
 const { decodeHTML } = require("entities");
+const { createPhotoGrouper } = require("./news-photo-groups");
 const { cities } = require("../shared/ontario-areas.json");
 const { feeds } = require("../shared/news-sources.json");
 
@@ -376,7 +377,13 @@ function createNewsService({
   fetchImpl = globalThis.fetch,
   now = Date.now,
   timeoutMs = 7000,
+  photoBudgetMs = 2500,
 } = {}) {
+  const photos = createPhotoGrouper({
+    fetchImpl,
+    now,
+    budgetMs: photoBudgetMs,
+  });
   const cache = new Map(),
     inflight = new Map();
   let active = 0;
@@ -483,7 +490,8 @@ function createNewsService({
         error.status = 503;
         throw error;
       }
-      return compileNews(city, district, results, now());
+      const news = compileNews(city, district, results, now());
+      return { ...news, ...(await photos.group(news.articles)) };
     },
   };
 }

@@ -6,6 +6,7 @@ export type NewsArticle = {
   source: string;
   publishedAt: number;
   imageUrl: string | null;
+  imageGroupKey?: string | null;
   scope: "local" | "regional" | "ontario";
   areaLabel: string;
   topics: string[];
@@ -22,6 +23,7 @@ export type NewsResult = {
   generatedAt: string;
   sources: { name: string; available: boolean; stale: boolean }[];
   notice: string | null;
+  imageGroupingPending?: boolean;
 };
 
 const API_URL = (

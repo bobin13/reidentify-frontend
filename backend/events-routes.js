@@ -25,7 +25,7 @@ function optionsFor(query, now) {
     latitude: number("latitude", -90, 90, 43.6532),
     longitude: number("longitude", -180, 180, -79.3832),
   };
-  const radiusKm = number("radiusKm", 1, 100, 10);
+  const radiusKm = number("radiusKm", 0.5, 100, 10);
   const days = number("days", 1, 31, 31);
   return {
     center,

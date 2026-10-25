@@ -20,7 +20,7 @@ import type { AppColors } from "../../constants/app-colors";
 import { useAppTheme } from "../../context/theme-context";
 import { useAuth } from "../../context/auth-context";
 import { resolveArea, selectionForProfile } from "../../lib/locations";
-import { articlePreviewImage } from "../../lib/news-images";
+import { articlePreviewImage, newsImageIdentity } from "../../lib/news-images";
 import {
   fetchAreaNews,
   type NewsArticle,
@@ -172,19 +172,49 @@ export default function HomeScreen() {
     setFilter("all");
     setVisibleCount(6);
   }, [scopeKey]);
-  const matches = useMemo(
-    () =>
-      (result?.articles ?? [])
-        .filter(
-          (article) => filter === "all" || article.topics.includes(filter),
-        )
-        .sort((a, b) => Number(!!b.imageUrl) - Number(!!a.imageUrl)),
-    [result, filter],
-  );
+  const matches = useMemo(() => {
+    const seen = new Set<string>();
+    return (result?.articles ?? [])
+      .filter((article) => filter === "all" || article.topics.includes(filter))
+      .sort((a, b) => Number(!!b.imageUrl) - Number(!!a.imageUrl))
+      .map((article) => {
+        const key =
+          article.imageGroupKey || newsImageIdentity(article.imageUrl);
+        const hidePhoto = !!key && seen.has(key);
+        if (key) seen.add(key);
+        return { ...article, hidePhoto };
+      })
+      .sort(
+        (a, b) =>
+          Number(!!b.imageUrl && !b.hidePhoto) -
+          Number(!!a.imageUrl && !a.hidePhoto),
+      );
+  }, [result, filter]);
+  const displayPhotos = useMemo(() => {
+    const seen = new Set<string>(),
+      photos = new Map<string, string | null>();
+    for (const article of matches) {
+      const candidate = article.hidePhoto
+        ? null
+        : article.imageUrl || previewImages[article.url] || null;
+      const key =
+        candidate && (article.imageGroupKey || newsImageIdentity(candidate));
+      photos.set(article.id, key && seen.has(key) ? null : candidate);
+      if (key) seen.add(key);
+    }
+    return photos;
+  }, [matches, previewImages]);
   const visibleArticles = useMemo(
     () => matches.slice(0, visibleCount),
     [matches, visibleCount],
   );
+
+  useEffect(() => {
+    if (!focused || loading || refreshing || !result?.imageGroupingPending)
+      return;
+    const timer = setTimeout(() => void loadNews(), 2500);
+    return () => clearTimeout(timer);
+  }, [focused, loading, refreshing, result?.imageGroupingPending, loadNews]);
 
   useEffect(() => {
     if (!focused || loading) return;
@@ -276,15 +306,17 @@ export default function HomeScreen() {
 
         {/* LIVE LOCAL NEWS */}
         <View style={styles.newsSection}>
-          <View
-            style={[
-              styles.newsHeading,
-              !cityName && styles.newsHeadingWithoutTitle,
-            ]}
-          >
-            {cityName && (
-              <Text accessibilityRole="header" style={styles.sectionTitle}>
+          <View style={styles.newsHeading}>
+            {cityName ? (
+              <Text
+                accessibilityRole="header"
+                style={[styles.sectionTitle, styles.newsHeadingTitle]}
+              >
                 {title}
+              </Text>
+            ) : (
+              <Text style={[styles.newsDescription, styles.newsHeadingTitle]}>
+                Updates from across Ontario.
               </Text>
             )}
             <Pressable
@@ -294,17 +326,18 @@ export default function HomeScreen() {
               disabled={refreshing}
               onPress={() => void loadNews()}
               style={styles.refreshButton}
+              hitSlop={6}
             >
-              <Text style={styles.sectionLink}>
+              <Text style={styles.refreshText}>
                 {refreshing ? "Refreshing…" : "Refresh"}
               </Text>
             </Pressable>
           </View>
-          <Text style={styles.newsDescription}>
-            {cityName
-              ? `Updates from ${cityName} and the surrounding area.`
-              : "Updates from across Ontario."}
-          </Text>
+          {cityName && (
+            <Text style={styles.newsDescription}>
+              Updates from {cityName} and the surrounding area.
+            </Text>
+          )}
           {cityName && result?.coverage === "ontario-only" && (
             <Text style={styles.newsDescription}>
               Updates for your area aren't available right now. Here is the
@@ -387,10 +420,8 @@ export default function HomeScreen() {
                 ]}
               >
                 <NewsPhoto
-                  key={
-                    article.imageUrl || previewImages[article.url] || "no-photo"
-                  }
-                  uri={article.imageUrl || previewImages[article.url]}
+                  key={displayPhotos.get(article.id) || "no-photo"}
+                  uri={displayPhotos.get(article.id)}
                 />
                 <View style={styles.newsMeta}>
                   <Text style={styles.newsSource}>{article.source}</Text>
@@ -568,7 +599,7 @@ function createStyles(colors: AppColors, isDark: boolean) {
       gap: 8,
     },
     newsArea: { color: colors.muted, fontSize: 12, lineHeight: 18 },
-    newsSection: { gap: 12, marginBottom: 28 },
+    newsSection: { gap: 8, marginBottom: 28 },
     newsHeading: {
       flexDirection: "row",
       alignItems: "center",
@@ -576,14 +607,23 @@ function createStyles(colors: AppColors, isDark: boolean) {
       flexWrap: "wrap",
       gap: 8,
     },
-    newsHeadingWithoutTitle: { justifyContent: "flex-end" },
+    newsHeadingTitle: { flex: 1 },
     refreshButton: {
-      minHeight: 44,
+      minHeight: 32,
       justifyContent: "center",
-      paddingHorizontal: 8,
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+      borderRadius: 10,
+      backgroundColor: colors.accent,
+    },
+    refreshText: {
+      color: colors.background,
+      fontSize: 14,
+      lineHeight: 20,
+      fontWeight: "800",
     },
     newsDescription: { color: colors.muted, fontSize: 15, lineHeight: 22 },
-    filters: { gap: 8, paddingVertical: 4 },
+    filters: { gap: 8 },
     filterChip: {
       minHeight: 44,
       justifyContent: "center",
@@ -747,7 +787,7 @@ function createStyles(colors: AppColors, isDark: boolean) {
       lineHeight: 32,
       fontWeight: "700",
       fontFamily: "serif",
-      marginBottom: 18,
+      marginBottom: 2,
     },
 
     sectionHeader: {
