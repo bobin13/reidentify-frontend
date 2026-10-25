@@ -138,6 +138,8 @@ export function AuthScreen({
   const passwordInput = useRef<TextInput>(null);
   const confirmInput = useRef<TextInput>(null);
   const isRegister = mode === "register";
+  const needsLocation = isRegister && !resolveArea(location);
+  const submitDisabled = submitting || needsLocation;
 
   useEffect(() => {
     setErrors({});
@@ -353,18 +355,32 @@ export function AuthScreen({
 
             <Pressable
               accessibilityRole="button"
-              accessibilityState={{ disabled: submitting, busy: submitting }}
-              disabled={submitting}
+              accessibilityHint={
+                needsLocation
+                  ? "Choose your city or town to create an account."
+                  : undefined
+              }
+              accessibilityState={{
+                disabled: submitDisabled,
+                busy: submitting,
+              }}
+              disabled={submitDisabled}
               onPress={() => void submit()}
               style={({ pressed }) => [
                 styles.primaryButton,
-                (pressed || submitting) && styles.pressed,
+                submitDisabled && styles.primaryButtonDisabled,
+                pressed && !submitDisabled && styles.pressed,
               ]}
             >
               {submitting ? (
                 <ActivityIndicator color={colors.background} />
               ) : (
-                <Text style={styles.primaryButtonText}>
+                <Text
+                  style={[
+                    styles.primaryButtonText,
+                    submitDisabled && styles.primaryButtonTextDisabled,
+                  ]}
+                >
                   {isRegister ? "Create account" : "Sign in"}
                 </Text>
               )}
@@ -487,6 +503,12 @@ function createStyles(colors: AppColors) {
       fontWeight: "700",
       textAlign: "center",
     },
+    primaryButtonDisabled: {
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    primaryButtonTextDisabled: { color: colors.muted },
     secondaryButton: {
       minHeight: 56,
       borderRadius: 14,
