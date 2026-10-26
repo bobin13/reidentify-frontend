@@ -1,4 +1,5 @@
 const { externalEventService } = require("./external-events");
+const { installMapRoutes } = require("./map-routes");
 
 function distanceKm(a, b) {
   const rad = (n) => (n * Math.PI) / 180;
@@ -98,6 +99,8 @@ function installEventRoutes(
   db,
   { now = Date.now, service = externalEventService(db) } = {},
 ) {
+  if (typeof service.readMapSummaries === "function")
+    installMapRoutes(app, db, { now, external: service });
   // Cache by search area, never by account. These are published public events.
   const cache = new Map();
   async function load(options) {

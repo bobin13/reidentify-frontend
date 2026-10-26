@@ -131,7 +131,9 @@ export function venuesFor(
   );
 }
 
-export function sessionTime(event: CommunityEvent) {
+export function sessionTime(
+  event: Pick<CommunityEvent, "startsAt" | "endsAt" | "timeZone">,
+) {
   const start = new Date(event.startsAt),
     end = new Date(event.endsAt);
   const timeZone = event.timeZone || "America/Toronto";
@@ -172,3 +174,28 @@ export function organizerURL(value: string | undefined) {
     return null;
   }
 }
+
+export type VenueSummary = {
+  id: string;
+  title: string;
+  location: string;
+  coordinate: Coordinates;
+  distance: number;
+  activityCount: number;
+  sessionCount: number;
+  nextSession: Pick<
+    CommunityEvent,
+    "id" | "title" | "startsAt" | "endsAt" | "timeZone"
+  >;
+};
+export type MapVenueResponse = {
+  venues: VenueSummary[];
+  sources?: EventSourceStatus[];
+  indexing?: boolean;
+  windowDays: number;
+};
+export type VenueScheduleResponse = {
+  events: CommunityEvent[];
+  total: number;
+  nextCursor: string | null;
+};

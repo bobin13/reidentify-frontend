@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   Linking,
   Platform,
@@ -15,6 +15,11 @@ import MapView, {
   type Region,
 } from "react-native-maps";
 import type { AppColors } from "../constants/app-colors";
+import {
+  clusterMapPoints,
+  regionForCluster,
+  type MapSymbol,
+} from "../lib/map-clusters";
 
 export type Coordinates = { latitude: number; longitude: number };
 export type MapPoint = {
@@ -85,11 +90,25 @@ export default function EventMap({
   const map = useRef<MapView>(null);
   const initial = useRef(regionFor(center, radiusKm)).current;
   const visibleRegion = useRef(initial);
+  const [renderRegion, setRenderRegion] = useState(initial);
+  const [mapSize, setMapSize] = useState({ width: 390, height: 500 });
   const [ready, setReady] = useState(false);
   const [mapType, setMapType] = useState<MapType>("standard");
   const [traffic, setTraffic] = useState(false);
   const [routeError, setRouteError] = useState("");
   const selected = events.find((event) => event.id === selectedId);
+  const symbols = useMemo(
+    () =>
+      clusterMapPoints(
+        events,
+        renderRegion,
+        mapSize.width,
+        mapSize.height,
+        selectedId,
+        100,
+      ),
+    [events, renderRegion, mapSize, selectedId],
+  );
 
   useEffect(() => {
     if (!ready) return;
@@ -98,6 +117,7 @@ export default function EventMap({
       radiusKm,
     );
     visibleRegion.current = next;
+    setRenderRegion(next);
     map.current?.animateToRegion(next, 350);
   }, [ready, center.latitude, center.longitude, radiusKm, recenterKey]);
 
@@ -118,6 +138,7 @@ export default function EventMap({
       ),
     };
     visibleRegion.current = next;
+    setRenderRegion(next);
     map.current?.animateToRegion(next, 250);
   }
 
@@ -142,6 +163,7 @@ export default function EventMap({
     if (!ready) return;
     const next = regionFor(center, radiusKm);
     visibleRegion.current = next;
+    setRenderRegion(next);
     map.current?.animateToRegion(next, 350);
   }
 
@@ -237,9 +259,14 @@ export default function EventMap({
           zoomControlEnabled={false}
           toolbarEnabled={false}
           moveOnMarkerPress={false}
+          onLayout={({ nativeEvent }) => {
+            const { width, height } = nativeEvent.layout;
+            if (width > 0 && height > 0) setMapSize({ width, height });
+          }}
           onMapReady={() => setReady(true)}
           onRegionChangeComplete={(region) => {
             visibleRegion.current = region;
+            setRenderRegion(region);
             onMove({ latitude: region.latitude, longitude: region.longitude });
           }}
         >
@@ -250,18 +277,32 @@ export default function EventMap({
             fillColor="rgba(22,121,108,0.06)"
             strokeWidth={1}
           />
-          {events.map((event) => (
-            <Marker
-              key={event.id}
-              identifier={event.id}
-              coordinate={event.coordinate}
-              title={event.title}
-              description={event.location}
-              pinColor={selectedId === event.id ? "#E87561" : "#16796C"}
-              zIndex={selectedId === event.id ? 2 : 1}
-              onPress={() => onSelect(event.id)}
-            />
-          ))}
+          {symbols.map((symbol) =>
+            symbol.kind === "cluster" ? (
+              <ClusterMarker
+                key={symbol.id}
+                symbol={symbol}
+                colors={colors}
+                onPress={() => {
+                  const next = regionForCluster(symbol, visibleRegion.current);
+                  visibleRegion.current = next;
+                  setRenderRegion(next);
+                  map.current?.animateToRegion(next, 300);
+                }}
+              />
+            ) : (
+              <Marker
+                key={symbol.id}
+                identifier={symbol.id}
+                coordinate={symbol.point.coordinate}
+                title={symbol.point.title}
+                description={symbol.point.location}
+                pinColor={selectedId === symbol.id ? "#E87561" : "#16796C"}
+                zIndex={selectedId === symbol.id ? 2 : 1}
+                onPress={() => onSelect(symbol.id)}
+              />
+            ),
+          )}
         </MapView>
         <View style={styles.zoomTools}>
           <Pressable
@@ -328,12 +369,63 @@ export default function EventMap({
         </View>
       ) : (
         <Text style={styles.hint}>
-          Tap an event pin for details and directions.
+          Tap a pin for details. Tap a number to see its places.
         </Text>
       )}
     </View>
   );
 }
+
+const ClusterMarker = memo(function ClusterMarker({
+  symbol,
+  colors,
+  onPress,
+}: {
+  symbol: Extract<MapSymbol<MapPoint>, { kind: "cluster" }>;
+  colors: AppColors;
+  onPress: () => void;
+}) {
+  const [tracking, setTracking] = useState(true);
+  useEffect(() => {
+    setTracking(true);
+    const timer = setTimeout(() => setTracking(false), 300);
+    return () => clearTimeout(timer);
+  }, [symbol.count, colors.accent, colors.background]);
+  return (
+    <Marker
+      identifier={symbol.id}
+      coordinate={symbol.coordinate}
+      title={symbol.count + " places"}
+      description="Tap to zoom in and choose a place"
+      tracksViewChanges={tracking}
+      onPress={onPress}
+      zIndex={3}
+    >
+      <View
+        collapsable={false}
+        accessible
+        accessibilityLabel={symbol.count + " places. Tap to zoom in."}
+        style={{
+          minWidth: 46,
+          height: 46,
+          paddingHorizontal: 8,
+          borderRadius: 23,
+          backgroundColor: colors.accent,
+          borderWidth: 3,
+          borderColor: colors.background,
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <Text
+          style={{ color: colors.background, fontWeight: "800", fontSize: 17 }}
+        >
+          {symbol.count}
+        </Text>
+      </View>
+    </Marker>
+  );
+});
 
 function createStyles(colors: AppColors) {
   return StyleSheet.create({

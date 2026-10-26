@@ -1,5 +1,6 @@
 const { createHash, randomUUID } = require("node:crypto");
 const { decodeHTML } = require("entities");
+const { mapCellFor, readCells } = require("./map-geography");
 
 const DAY = 86400000;
 const REFRESH_MS = 6 * 60 * 60 * 1000;
@@ -604,6 +605,26 @@ async function collectSource(
   return { ...result, windowEnd: new Date(window.end).toISOString() };
 }
 
+function mapSummaryFor(chunk) {
+  return {
+    venueId: chunk.venueId || chunk.id.replace(/-\d+$/, ""),
+    venueName: chunk.venueName,
+    location: chunk.location,
+    latitude: chunk.latitude,
+    longitude: chunk.longitude,
+    mapCell: mapCellFor(chunk.latitude, chunk.longitude),
+    sessions: (chunk.sessions || []).map((item) => ({
+      id: item.id,
+      seriesId: item.seriesId || item.id,
+      title: item.title,
+      startsAt: item.startsAt,
+      endsAt: item.endsAt,
+      interests: item.interests || [],
+      timeZone: item.timeZone || "America/Toronto",
+    })),
+  };
+}
+
 // A complete source snapshot is published atomically through one pointer.
 // Failed/partial downloads never replace the last successful schedule.
 function createExternalEventService(
@@ -611,6 +632,7 @@ function createExternalEventService(
   { now = Date.now, fetchImpl = fetch, logger = console } = {},
 ) {
   const sourceRefs = db.collection(SOURCE_COLLECTION);
+  let mapMetadata = null;
   let timer = null,
     running = null;
   async function syncOne(source, force) {
@@ -622,7 +644,9 @@ function createExternalEventService(
         previous = snap.data() || {};
       if (
         previous.leaseUntil > startedAt ||
-        (!force && previous.nextAttemptAt > startedAt)
+        (!force &&
+          previous.mapSchemaVersion === 2 &&
+          previous.nextAttemptAt > startedAt)
       )
         return false;
       tx.set(
@@ -641,6 +665,41 @@ function createExternalEventService(
     if (!claimed) return;
     const run = reference.collection("runs").doc(owner);
     try {
+      // Index the existing successful snapshot before contacting the publisher.
+      // Saved activities remain usable even if that publisher is offline today.
+      const legacy = (await reference.get()).data() || {};
+      if (legacy.activeRunId && legacy.mapSchemaVersion !== 2) {
+        const legacyRun = reference.collection("runs").doc(legacy.activeRunId);
+        const old = await legacyRun.collection("venues").get();
+        const mapCells = new Set();
+        for (let offset = 0; offset < old.docs.length; offset += 200) {
+          const batch = db.batch();
+          for (const doc of old.docs.slice(offset, offset + 200)) {
+            const summary = mapSummaryFor({ ...doc.data(), id: doc.id });
+            mapCells.add(summary.mapCell);
+            batch.set(
+              legacyRun.collection("mapSummaries").doc(doc.id),
+              summary,
+            );
+          }
+          await batch.commit();
+        }
+        await db.runTransaction(async (tx) => {
+          const latest = (await tx.get(reference)).data() || {};
+          if (
+            latest.leaseOwner !== owner ||
+            latest.leaseUntil <= now() ||
+            latest.activeRunId !== legacy.activeRunId
+          )
+            throw new Error("Saved map index changed; retrying.");
+          tx.set(
+            reference,
+            { mapSchemaVersion: 2, mapCells: [...mapCells] },
+            { merge: true },
+          );
+        });
+        mapMetadata = null;
+      }
       const collected = await collectSource(source, {
         now: startedAt,
         fetchImpl,
@@ -681,6 +740,10 @@ function createExternalEventService(
             venueId: chunk.id.replace(/-\d+$/, ""),
             sourceId: source.id,
           });
+          batch.set(
+            run.collection("mapSummaries").doc(chunk.id),
+            mapSummaryFor(chunk),
+          );
         }
         await batch.commit();
       }
@@ -697,6 +760,14 @@ function createExternalEventService(
           reference,
           {
             activeRunId: owner,
+            mapSchemaVersion: 2,
+            mapCells: [
+              ...new Set(
+                chunks.map((chunk) =>
+                  mapCellFor(chunk.latitude, chunk.longitude),
+                ),
+              ),
+            ],
             lastSuccessAt: now(),
             windowEnd: collected.windowEnd,
             nextAttemptAt: now() + REFRESH_MS,
@@ -709,6 +780,7 @@ function createExternalEventService(
         );
         return true;
       });
+      if (committed) mapMetadata = null;
       if (!committed)
         throw new Error("Import lease expired; retained the previous schedule");
       logger.log(
@@ -826,6 +898,100 @@ function createExternalEventService(
     );
     return { events, sources: statuses };
   }
+  async function readMapSummaries(
+    bounds,
+    cells,
+    budget = { remainingDocs: 6000, remainingBytes: 6 * 1024 * 1024 },
+  ) {
+    if (!mapMetadata || mapMetadata.expires <= now()) {
+      const promise = Promise.all(
+        SOURCES.map((source) => sourceRefs.doc(source.id).get()),
+      );
+      mapMetadata = { expires: now() + 40000, promise };
+      promise.catch(() => {
+        mapMetadata = null;
+      });
+    }
+    const snapshots = await mapMetadata.promise;
+    const sources = [],
+      records = [];
+    // Sequential sources keep the database read budget bounded across providers.
+    for (let index = 0; index < SOURCES.length; index++) {
+      const source = SOURCES[index],
+        data = snapshots[index].data() || {};
+      const ready = Boolean(data.activeRunId) && data.mapSchemaVersion === 2;
+      const status = {
+        id: source.id,
+        name: source.name,
+        area: source.area,
+        ready,
+        refreshing: data.leaseUntil > now() || (!ready && !data.lastError),
+        lastSuccessAt: data.lastSuccessAt
+          ? new Date(data.lastSuccessAt).toISOString()
+          : null,
+        stale:
+          Boolean(data.lastError) ||
+          !data.lastSuccessAt ||
+          now() - data.lastSuccessAt > 24 * 60 * 60 * 1000,
+      };
+      sources.push(status);
+      if (
+        !ready ||
+        (Array.isArray(data.mapCells) &&
+          !data.mapCells.some((cell) => cells.includes(cell)))
+      )
+        continue;
+      const docs = await readCells(
+        sourceRefs
+          .doc(source.id)
+          .collection("runs")
+          .doc(data.activeRunId)
+          .collection("mapSummaries"),
+        cells,
+        null,
+        budget,
+      );
+      for (const doc of docs)
+        records.push({
+          ...doc.data(),
+          sourceId: source.id,
+          sourceName: source.name,
+          stale: status.stale,
+          ref: {
+            sourceId: source.id,
+            runId: data.activeRunId,
+            chunkId: doc.id,
+          },
+        });
+    }
+    return { records, sources };
+  }
+  async function loadMapSessions(reference) {
+    if (!SOURCES.some((source) => source.id === reference.sourceId))
+      throw new Error("Unknown community calendar.");
+    const snapshot = await sourceRefs
+      .doc(reference.sourceId)
+      .collection("runs")
+      .doc(reference.runId)
+      .collection("venues")
+      .doc(reference.chunkId)
+      .get();
+    if (!snapshot.exists)
+      throw Object.assign(
+        new Error(
+          "This calendar has updated. Refresh the map and select the place again.",
+        ),
+        { status: 409 },
+      );
+    const venue = snapshot.data();
+    return (venue.sessions || []).map((item) => ({
+      ...item,
+      venueId: venue.venueId,
+      venueName: venue.venueName,
+      location: venue.location,
+      coordinate: { latitude: venue.latitude, longitude: venue.longitude },
+    }));
+  }
   function start() {
     if (timer) return () => {};
     void sync();
@@ -836,7 +1002,7 @@ function createExternalEventService(
       timer = null;
     };
   }
-  return { sync, read, start };
+  return { sync, read, start, readMapSummaries, loadMapSessions };
 }
 
 function externalEventService(db) {

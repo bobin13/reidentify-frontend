@@ -1,5 +1,6 @@
 const { createHash } = require("node:crypto");
 const { Timestamp, FieldPath } = require("firebase-admin/firestore");
+const { mapCellFor } = require("./map-geography");
 
 const ALLOWED_INTERESTS = new Set([
   "Walking",
@@ -970,6 +971,7 @@ function installGroupRoutes(app, db, { clock = Date.now } = {}) {
           description,
           latitude: b.latitude,
           longitude: b.longitude,
+          mapCell: mapCellFor(b.latitude, b.longitude),
           startsAt: Timestamp.fromMillis(start),
           endsAt: Timestamp.fromMillis(end),
           status: "published",

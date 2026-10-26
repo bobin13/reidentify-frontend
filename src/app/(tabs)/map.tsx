@@ -33,7 +33,10 @@ import {
   venuesFor,
   type ActivitySeries,
   type Coordinates,
-  type EventResponse,
+  type MapVenueResponse,
+  type VenueSummary,
+  type VenueScheduleResponse,
+  type CommunityEvent,
   type EventVenue,
 } from "../../lib/map-events";
 
@@ -86,27 +89,41 @@ export default function MapScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const uid = user?.id || "";
-  const queryKey = [uid, center.latitude, center.longitude, radiusKm].join("|");
-  const [records, setRecords] = useState<{ key: string; data: EventResponse }>({
-    key: "",
-    data: { events: [] },
-  });
-  const data = records.key === queryKey ? records.data : { events: [] };
   const interests = useMemo(() => user?.interests || [], [user?.interests]);
   const interestsOnly = useInterests && interests.length > 0;
+  const interestKey = JSON.stringify(
+    interestsOnly ? [...new Set(interests)].sort() : [],
+  );
+  const queryString = useMemo(
+    () =>
+      new URLSearchParams({
+        latitude: String(center.latitude),
+        longitude: String(center.longitude),
+        radiusKm: String(radiusKm),
+        days: "31",
+        interests: interestKey,
+      }).toString(),
+    [center.latitude, center.longitude, radiusKm, interestKey],
+  );
+  const queryKey = uid + "|" + queryString;
+  const [records, setRecords] = useState<{
+    key: string;
+    data: MapVenueResponse;
+  }>({
+    key: "",
+    data: { venues: [], windowDays: 31 },
+  });
+  const data: MapVenueResponse =
+    records.key === queryKey ? records.data : { venues: [], windowDays: 31 };
   const pendingCenter = useRef(center);
   const locationRequest = useRef(0);
   const mounted = useRef(true);
-  const venues = useMemo(
-    () =>
-      venuesFor(data.events, center, radiusKm, interests, interestsOnly, clock),
-    [data.events, center, radiusKm, interests, interestsOnly, clock],
-  );
+  const venues = data.venues;
   const selected = venues.find((venue) => venue.id === selectedId);
   const sources = data.sources || [];
-  const preparing = sources.some(
-    (source) => !source.ready && source.refreshing,
-  );
+  const preparing =
+    data.indexing ||
+    sources.some((source) => !source.ready && source.refreshing);
   const savedSources = sources.filter((source) => source.ready && source.stale);
   const unavailable = sources.filter(
     (source) => !source.ready && !source.refreshing,
@@ -175,21 +192,15 @@ export default function MapScreen() {
           const account = auth.currentUser;
           if (!account || account.uid !== uid)
             throw new Error("Please sign in again.");
-          const query = new URLSearchParams({
-            latitude: String(center.latitude),
-            longitude: String(center.longitude),
-            radiusKm: String(radiusKm),
-            days: "31",
-          });
-          const response = await apiRequest<EventResponse>(
+          const response = await apiRequest<MapVenueResponse>(
             account,
             "GET",
             undefined,
-            "/api/events?" + query.toString(),
+            "/api/map/venues?" + queryString,
           );
-          if (!Array.isArray(response.events))
+          if (!Array.isArray(response.venues))
             throw new Error(
-              "Events are temporarily unavailable. Please try again.",
+              "Activities are temporarily unavailable. Please try again.",
             );
           if (active && auth.currentUser?.uid === uid) {
             setRecords({ key: queryKey, data: response });
@@ -207,7 +218,7 @@ export default function MapScreen() {
         }
       }
       void refresh();
-      const timer = setInterval(() => void refresh(), 30000);
+      const timer = setInterval(() => void refresh(), 60000);
       const subscription = AppState.addEventListener("change", (state) => {
         if (state === "active") void refresh();
       });
@@ -216,7 +227,7 @@ export default function MapScreen() {
         clearInterval(timer);
         subscription.remove();
       };
-    }, [uid, queryKey, center.latitude, center.longitude, radiusKm, reload]),
+    }, [uid, queryKey, queryString, reload]),
   );
 
   const handleMapMove = useCallback(
@@ -480,7 +491,14 @@ export default function MapScreen() {
         </View>
       )}
       {selected && (
-        <VenueSchedule key={selected.id} venue={selected} styles={styles} />
+        <LazyVenueSchedule
+          key={uid + "|" + queryString + "|" + selected.id}
+          uid={uid}
+          queryString={queryString}
+          venue={selected}
+          styles={styles}
+          clock={clock}
+        />
       )}
       <View style={styles.row}>
         <Pressable
@@ -577,14 +595,12 @@ export default function MapScreen() {
           <Text style={styles.eventTitle}>{venue.title}</Text>
           <Text style={styles.body}>{venue.location}</Text>
           <Text style={styles.link}>
-            {venue.activities.length}{" "}
-            {venue.activities.length === 1 ? "activity" : "activities"} ·{" "}
+            {venue.activityCount}{" "}
+            {venue.activityCount === 1 ? "activity" : "activities"} ·{" "}
             {distanceLabel(venue.distance)}
           </Text>
-          <Text style={styles.body}>Next: {venue.activities[0].title}</Text>
-          <Text style={styles.help}>
-            {sessionTime(venue.activities[0].sessions[0])}
-          </Text>
+          <Text style={styles.body}>Next: {venue.nextSession.title}</Text>
+          <Text style={styles.help}>{sessionTime(venue.nextSession)}</Text>
           <Text style={styles.link}>
             {selected?.id === venue.id
               ? "Activities shown above"
@@ -610,6 +626,168 @@ export default function MapScreen() {
 }
 
 type Styles = ReturnType<typeof createStyles>;
+type ScheduleCache = VenueScheduleResponse & { expires: number };
+const scheduleCache = new Map<string, ScheduleCache>();
+function LazyVenueSchedule({
+  uid,
+  queryString,
+  venue,
+  styles,
+  clock,
+}: {
+  uid: string;
+  queryString: string;
+  venue: VenueSummary;
+  styles: Styles;
+  clock: number;
+}) {
+  const path =
+    "/api/map/venues/" +
+    encodeURIComponent(venue.id) +
+    "/events?" +
+    queryString;
+  const cacheKey = uid + "|" + path;
+  const saved = scheduleCache.get(cacheKey);
+  const [page, setPage] = useState<VenueScheduleResponse>(() =>
+    saved && saved.expires > Date.now()
+      ? saved
+      : { events: [], total: 0, nextCursor: null },
+  );
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [retry, setRetry] = useState(0);
+  const request = useRef<((cursor: string | null) => Promise<void>) | null>(
+    null,
+  );
+  useFocusEffect(
+    useCallback(() => {
+      let active = true,
+        busy = false;
+      let accumulated: CommunityEvent[] = [];
+      const load = async (cursor: string | null) => {
+        if (!active || busy) return;
+        busy = true;
+        setLoading(true);
+        setError("");
+        try {
+          const account = auth.currentUser;
+          if (!account || account.uid !== uid)
+            throw new Error("Please sign in again.");
+          const result = await apiRequest<VenueScheduleResponse>(
+            account,
+            "GET",
+            undefined,
+            path + (cursor ? "&cursor=" + encodeURIComponent(cursor) : ""),
+          );
+          if (
+            !Array.isArray(result.events) ||
+            !Number.isInteger(result.total) ||
+            (result.nextCursor !== null &&
+              typeof result.nextCursor !== "string")
+          )
+            throw new Error("The schedule is unavailable. Try again.");
+          if (!active || auth.currentUser?.uid !== uid) return;
+          const unique = new Map(
+            (cursor ? [...accumulated, ...result.events] : result.events).map(
+              (event) => [event.id, event],
+            ),
+          );
+          accumulated = [...unique.values()];
+          const next = { ...result, events: accumulated };
+          setPage(next);
+          if (accumulated.length <= 300) {
+            scheduleCache.set(cacheKey, {
+              ...next,
+              expires: Date.now() + 60000,
+            });
+            if (scheduleCache.size > 8)
+              scheduleCache.delete(scheduleCache.keys().next().value!);
+          } else scheduleCache.delete(cacheKey);
+        } catch (issue) {
+          if (active)
+            setError(
+              issue instanceof Error
+                ? issue.message
+                : "Could not load these dates.",
+            );
+        } finally {
+          busy = false;
+          if (active) setLoading(false);
+        }
+      };
+      request.current = load;
+      void load(null);
+      return () => {
+        active = false;
+        request.current = null;
+      };
+    }, [uid, path, cacheKey, retry]),
+  );
+  const full = useMemo(
+    () => venuesFor(page.events, venue.coordinate, 1, [], false, clock)[0],
+    [page.events, venue.coordinate, clock],
+  );
+  return (
+    <View>
+      {full ? (
+        <VenueSchedule
+          venue={{
+            ...full,
+            id: venue.id,
+            title: venue.title,
+            location: venue.location,
+          }}
+          styles={styles}
+        />
+      ) : (
+        <View style={[styles.card, styles.selectedCard]}>
+          <Text style={styles.sectionTitle}>Activities at {venue.title}</Text>
+          <Text style={styles.body}>{venue.location}</Text>
+          {!loading && !error && (
+            <Text style={styles.help}>
+              No upcoming dates remain. Refresh the map.
+            </Text>
+          )}
+        </View>
+      )}
+      {loading && (
+        <View style={styles.statusRow}>
+          <ActivityIndicator color={styles.link.color} />
+          <Text style={styles.help}>Loading dates…</Text>
+        </View>
+      )}
+      {!!error && (
+        <View style={styles.statusRow}>
+          <Text accessibilityRole="alert" style={styles.statusText}>
+            {error}
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            disabled={loading}
+            style={styles.textButton}
+            onPress={() => setRetry((n) => n + 1)}
+          >
+            <Text style={styles.link}>Try again</Text>
+          </Pressable>
+        </View>
+      )}
+      {!!page.nextCursor && !error && (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ disabled: loading }}
+          disabled={loading}
+          style={styles.outlineButton}
+          onPress={() => void request.current?.(page.nextCursor)}
+        >
+          <Text style={styles.link}>
+            {loading ? "Loading…" : "Load more activities and dates"}
+          </Text>
+        </Pressable>
+      )}
+    </View>
+  );
+}
+
 function VenueSchedule({
   venue,
   styles,
@@ -682,7 +860,7 @@ function ActivitySchedule({
           {open
             ? "Hide details"
             : activity.sessions.length > 1
-              ? "Details and " + activity.sessions.length + " upcoming dates"
+              ? "See details and loaded dates"
               : "See details"}
         </Text>
       </Pressable>
