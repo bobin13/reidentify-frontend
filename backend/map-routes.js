@@ -1,3 +1,4 @@
+const { installViewportRoute } = require("./map-viewport");
 const { createHash } = require("node:crypto");
 const {
   cellsFor,
@@ -65,6 +66,8 @@ function mapOptions(query, now) {
     start: now,
     end: now + days * DAY,
     interests,
+    fresh: query.fresh === "1",
+    diagnostics: query.diagnostics === "1",
   };
   options.cells = cellsFor(options.center, options.radiusKm);
   options.key = JSON.stringify([
@@ -76,24 +79,31 @@ function mapOptions(query, now) {
   return options;
 }
 function eligible(event, place, options) {
+  return rejectionReason(event, place, options) === null;
+}
+function rejectionReason(event, place, options) {
   const start = Date.parse(event.startsAt),
     end = Date.parse(event.endsAt);
-  return Boolean(
-    event.title &&
-    place.location &&
-    Number.isFinite(place.latitude) &&
-    Number.isFinite(place.longitude) &&
-    Math.abs(place.latitude) <= 90 &&
-    Math.abs(place.longitude) <= 180 &&
-    end > Math.max(options.start, start) &&
-    start < options.end &&
-    distanceKm(options.center, {
-      latitude: place.latitude,
-      longitude: place.longitude,
-    }) <= options.radiusKm &&
-    (!options.interests.length ||
-      event.interests?.some((v) => options.interests.includes(v))),
-  );
+  if (
+    !event.title ||
+    !place.location ||
+    !Number.isFinite(start) ||
+    !Number.isFinite(end) ||
+    end <= start ||
+    !Number.isFinite(place.latitude) ||
+    !Number.isFinite(place.longitude) ||
+    Math.abs(place.latitude) > 90 ||
+    Math.abs(place.longitude) > 180
+  )
+    return "invalid";
+  if (end <= options.start || start >= options.end) return "dates";
+  if (distanceKm(options.center, place) > options.radiusKm) return "distance";
+  if (
+    options.interests.length &&
+    !event.interests?.some((v) => options.interests.includes(v))
+  )
+    return "interests";
+  return null;
 }
 function groupEvent(doc) {
   const d = doc.data();
@@ -119,7 +129,12 @@ function groupEvent(doc) {
 
 function createMapService(
   db,
-  { external, now = Date.now, index = groupMapIndex(db, { now }) } = {},
+  {
+    external,
+    now = Date.now,
+    index = groupMapIndex(db, { now }),
+    logger = console,
+  } = {},
 ) {
   const cache = new Map();
   async function load(options) {
@@ -127,7 +142,7 @@ function createMapService(
     const cacheKey = options.cells.join("|");
     const old = cache.get(cacheKey);
     let raw;
-    if (old && old.expires > now()) raw = await old.promise;
+    if (!options.fresh && old && old.expires > now()) raw = await old.promise;
     else {
       const promise = (async () => {
         const budget = { remainingDocs: 6000, remainingBytes: 6 * 1024 * 1024 };
@@ -176,8 +191,29 @@ function createMapService(
     }
     const { out, groupDocs } = raw;
     const entries = new Map();
+    const counters = new Map();
+    function counter(sourceId) {
+      if (!counters.has(sourceId))
+        counters.set(sourceId, {
+          sourceId,
+          candidateSessions: 0,
+          matchedSessions: 0,
+          invalid: 0,
+          dates: 0,
+          distance: 0,
+          interests: 0,
+          places: new Set(),
+        });
+      return counters.get(sourceId);
+    }
     function add(event, place, reference, origin) {
-      if (!eligible(event, place, options)) return;
+      const count = counter(reference?.sourceId || "group");
+      count.candidateSessions++;
+      const reason = rejectionReason(event, place, options);
+      if (reason) {
+        count[reason]++;
+        return;
+      }
       const position =
         place.latitude.toFixed(5) + "," + place.longitude.toFixed(5);
       const id = "place-" + hash(position);
@@ -203,6 +239,8 @@ function createMapService(
       const identity =
         origin + ":" + (reference?.sourceId || "group") + ":" + event.id;
       if (entry.sessionIds.has(identity)) return;
+      count.matchedSessions++;
+      count.places.add(id);
       entry.sessionIds.add(identity);
       entry.activityIds.add(origin + ":" + (event.seriesId || event.id));
       const next = {
@@ -239,11 +277,48 @@ function createMapService(
     const venues = [...entries.values()].sort(
       (a, b) => a.distance - b.distance || a.id.localeCompare(b.id),
     );
-    return { entries, venues, sources: out.sources, indexing: !index.ready };
+    const diagnostics = {
+      center: options.center,
+      radiusKm: options.radiusKm,
+      interests: options.interests,
+      cells: options.cells.length,
+      returnedPlaces: venues.length,
+      sources: (out.sources || []).map((source) => {
+        const count = counter(source.id);
+        return {
+          sourceId: source.id,
+          ready: source.ready,
+          stale: source.stale,
+          lastSuccessAt: source.lastSuccessAt,
+          importRevision: source.importRevision,
+          imported: source.stats || null,
+          mapState: source.mapState,
+          mapDocuments: source.mapDocuments,
+          candidateSessions: count.candidateSessions,
+          matchedSessions: count.matchedSessions,
+          matchedPlaces: count.places.size,
+          rejected: {
+            invalid: count.invalid,
+            dates: count.dates,
+            distance: count.distance,
+            interests: count.interests,
+          },
+        };
+      }),
+    };
+    return {
+      entries,
+      venues,
+      sources: out.sources,
+      indexing: !index.ready,
+      diagnostics,
+    };
   }
 
   async function summaries(options) {
     const data = await load(options);
+    if (options.diagnostics)
+      logger.log("[maps-debug] " + JSON.stringify(data.diagnostics));
     return {
       venues: data.venues.map((v) => ({
         id: v.id,
@@ -258,6 +333,7 @@ function createMapService(
       sources: data.sources,
       indexing: data.indexing,
       windowDays: options.days,
+      ...(options.diagnostics ? { diagnostics: data.diagnostics } : {}),
     };
   }
   async function schedule(options, id, cursor) {
@@ -360,6 +436,13 @@ function createMapService(
   return { summaries, schedule };
 }
 function installMapRoutes(app, db, dependencies) {
+  // Idempotent: route installation also ensures scheduled calendar imports run.
+  dependencies.external.start?.();
+  installViewportRoute(app, db, {
+    now: dependencies.now,
+    logger: dependencies.logger,
+    sources: dependencies.sources,
+  });
   const service = createMapService(db, dependencies);
   const handle = (fn) => async (req, res, next) => {
     try {

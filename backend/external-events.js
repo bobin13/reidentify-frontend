@@ -1,17 +1,48 @@
 const { createHash, randomUUID } = require("node:crypto");
 const { decodeHTML } = require("entities");
 const { mapCellFor, readCells } = require("./map-geography");
+const {
+  EXTRA_SOURCES,
+  collectAdditionalSource,
+} = require("./calendar-importers");
 
 const DAY = 86400000;
+const IMPORT_REVISION = 4;
 const REFRESH_MS = 6 * 60 * 60 * 1000;
 const RETRY_MS = 30 * 60 * 1000;
 const LEASE_MS = 10 * 60 * 1000;
 const SOURCE_COLLECTION = "externalEventSources";
 const CKAN = "https://ckan0.cf.opendata.inter.prod-toronto.ca/api/3/action/";
 const services = new WeakMap();
+// New adapters version themselves; adding one must not force every old source
+// to download again or invalidate its saved successful snapshot.
+const revisionFor = (source) => source.importRevision ?? IMPORT_REVISION;
+async function limitedSettled(items, limit, operation) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    for (;;) {
+      const index = next++;
+      if (index >= items.length) return;
+      try {
+        results[index] = {
+          status: "fulfilled",
+          value: await operation(items[index]),
+        };
+      } catch (reason) {
+        results[index] = { status: "rejected", reason };
+      }
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, worker),
+  );
+  return results;
+}
 const SOURCES = [
   { id: "tpl", name: "Toronto Public Library", area: "Toronto", type: "tpl" },
   { id: "bayshore", name: "Bay Shore Seniors", area: "Tiny", type: "bayshore" },
+  ...EXTRA_SOURCES,
 ];
 
 function key(value) {
@@ -594,14 +625,29 @@ function finish(source, venues, stats) {
 
 async function collectSource(
   source,
-  { now = Date.now(), fetchImpl = fetch } = {},
+  { now = Date.now(), fetchImpl = fetch, venueCoordinates, readerOptions } = {},
 ) {
   const window = windowFor(now);
-  const result = await (source.type === "tpl" ? collectTPL : collectBayShore)(
-    source,
-    window,
-    fetchImpl,
-  );
+  let result;
+  if (source.type === "tpl")
+    result = await collectTPL(source, window, fetchImpl);
+  else if (source.type === "bayshore")
+    result = await collectBayShore(source, window, fetchImpl);
+  else
+    result = await collectAdditionalSource(source, {
+      window,
+      fetchImpl,
+      venueCoordinates,
+      readerOptions,
+      key,
+      plain,
+      normalized,
+      localToISO,
+      session,
+      addSession,
+      finish,
+      interestsFor,
+    });
   return { ...result, windowEnd: new Date(window.end).toISOString() };
 }
 
@@ -629,9 +675,21 @@ function mapSummaryFor(chunk) {
 // Failed/partial downloads never replace the last successful schedule.
 function createExternalEventService(
   db,
-  { now = Date.now, fetchImpl = fetch, logger = console } = {},
+  { now = Date.now, fetchImpl = fetch, logger = console, readerOptions } = {},
 ) {
   const sourceRefs = db.collection(SOURCE_COLLECTION);
+  const venueCoordinates = {
+    async get(id) {
+      return (
+        (
+          await db.collection("externalVenueCoordinates").doc(id).get()
+        ).data() || null
+      );
+    },
+    async set(id, value) {
+      await db.collection("externalVenueCoordinates").doc(id).set(value);
+    },
+  };
   let mapMetadata = null;
   let timer = null,
     running = null;
@@ -645,7 +703,7 @@ function createExternalEventService(
       if (
         previous.leaseUntil > startedAt ||
         (!force &&
-          previous.mapSchemaVersion === 2 &&
+          previous.importRevision === revisionFor(source) &&
           previous.nextAttemptAt > startedAt)
       )
         return false;
@@ -662,7 +720,28 @@ function createExternalEventService(
       );
       return true;
     });
-    if (!claimed) return;
+    if (!claimed) {
+      if (source.id === "ottawa-library") {
+        const saved = (await reference.get()).data() || {};
+        logger.log(
+          "[events-debug] " +
+            JSON.stringify({
+              source: source.id,
+              action: "usingSavedSnapshot",
+              stats: saved.stats || null,
+              importRevision: saved.importRevision ?? null,
+              lastSuccessAt: saved.lastSuccessAt
+                ? new Date(saved.lastSuccessAt).toISOString()
+                : null,
+              importRunning: saved.leaseUntil > now(),
+              nextAttemptAt: saved.nextAttemptAt
+                ? new Date(saved.nextAttemptAt).toISOString()
+                : null,
+            }),
+        );
+      }
+      return;
+    }
     const run = reference.collection("runs").doc(owner);
     try {
       // Index the existing successful snapshot before contacting the publisher.
@@ -703,6 +782,8 @@ function createExternalEventService(
       const collected = await collectSource(source, {
         now: startedAt,
         fetchImpl,
+        venueCoordinates,
+        readerOptions,
       });
       await run.set({ createdAt: startedAt, status: "building" });
       // Chunk large venue schedules well below Firestore's 1 MiB document limit.
@@ -768,9 +849,13 @@ function createExternalEventService(
                 ),
               ),
             ],
+            importRevision: revisionFor(source),
+            consecutiveFailures: 0,
             lastSuccessAt: now(),
             windowEnd: collected.windowEnd,
-            nextAttemptAt: now() + REFRESH_MS,
+            nextAttemptAt:
+              now() +
+              (collected.stats.coordinateFailures ? RETRY_MS : REFRESH_MS),
             leaseOwner: "",
             leaseUntil: 0,
             lastError: "",
@@ -792,6 +877,19 @@ function createExternalEventService(
           collected.stats.venues +
           " venues",
       );
+      if (source.id === "ottawa-library")
+        logger.log(
+          "[events-debug] " +
+            JSON.stringify({
+              source: source.id,
+              revision: IMPORT_REVISION,
+              activeRunId: owner,
+              windowEnd: collected.windowEnd,
+              stats: collected.stats,
+            }),
+        );
+      for (const warning of collected.stats.warnings || [])
+        logger.warn("[events] " + source.name + " venue lookup: " + warning);
       // Older snapshots remain for a day so in-flight readers can finish.
       const old = await reference
         .collection("runs")
@@ -801,9 +899,11 @@ function createExternalEventService(
         if (doc.id !== owner) await db.recursiveDelete(doc.ref);
       }
     } catch (error) {
-      const message = String(error.message || "Import failed").slice(0, 250);
+      const message = String(error.message || "Import failed").slice(0, 900);
+      let hadSavedListings = false;
       await db.runTransaction(async (tx) => {
         const latest = (await tx.get(reference)).data() || {};
+        hadSavedListings = Boolean(latest.activeRunId);
         if (latest.leaseOwner === owner)
           tx.set(
             reference,
@@ -811,7 +911,17 @@ function createExternalEventService(
               leaseOwner: "",
               leaseUntil: 0,
               lastError: message,
-              nextAttemptAt: now() + RETRY_MS,
+              importRevision: revisionFor(source),
+              consecutiveFailures: (latest.consecutiveFailures || 0) + 1,
+              nextAttemptAt:
+                now() +
+                Math.min(
+                  RETRY_MS,
+                  5 *
+                    60 *
+                    1000 *
+                    2 ** Math.min(latest.consecutiveFailures || 0, 3),
+                ),
             },
             { merge: true },
           );
@@ -821,15 +931,15 @@ function createExternalEventService(
           source.name +
           ": " +
           message +
-          ". Saved listings retained.",
+          (hadSavedListings
+            ? ". Saved listings retained."
+            : ". No successful import yet; will retry automatically."),
       );
     }
   }
   async function sync({ force = false } = {}) {
     if (running) return running;
-    running = Promise.allSettled(
-      SOURCES.map((source) => syncOne(source, force)),
-    )
+    running = limitedSettled(SOURCES, 3, (source) => syncOne(source, force))
       .then((results) => {
         for (const result of results)
           if (result.status === "rejected") {
@@ -903,7 +1013,7 @@ function createExternalEventService(
     cells,
     budget = { remainingDocs: 6000, remainingBytes: 6 * 1024 * 1024 },
   ) {
-    if (!mapMetadata || mapMetadata.expires <= now()) {
+    if (bounds.fresh || !mapMetadata || mapMetadata.expires <= now()) {
       const promise = Promise.all(
         SOURCES.map((source) => sourceRefs.doc(source.id).get()),
       );
@@ -933,6 +1043,16 @@ function createExternalEventService(
           Boolean(data.lastError) ||
           !data.lastSuccessAt ||
           now() - data.lastSuccessAt > 24 * 60 * 60 * 1000,
+        stats: data.stats
+          ? {
+              venues: data.stats.venues ?? null,
+              sessions: data.stats.sessions ?? null,
+              unverified: data.stats.unverified ?? null,
+            }
+          : null,
+        importRevision: data.importRevision ?? null,
+        mapDocuments: 0,
+        mapState: ready ? "outsideCells" : "notReady",
       };
       sources.push(status);
       if (
@@ -951,6 +1071,8 @@ function createExternalEventService(
         null,
         budget,
       );
+      status.mapDocuments = docs.length;
+      status.mapState = docs.length ? "loaded" : "noMapDocuments";
       for (const doc of docs)
         records.push({
           ...doc.data(),
@@ -1022,4 +1144,5 @@ module.exports = {
   localToISO,
   interestsFor,
   windowFor,
+  limitedSettled,
 };

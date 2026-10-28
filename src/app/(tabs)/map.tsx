@@ -26,22 +26,31 @@ import {
   type AreaSelection,
 } from "../../lib/locations";
 import {
-  distanceKm,
   distanceLabel,
   organizerURL,
   sessionTime,
   venuesFor,
   type ActivitySeries,
   type Coordinates,
-  type MapVenueResponse,
   type VenueSummary,
   type VenueScheduleResponse,
   type CommunityEvent,
   type EventVenue,
 } from "../../lib/map-events";
 
+import {
+  initialMapRegion,
+  queryForView,
+  visibleVenues,
+  mergeViewPage,
+  sameMapRegion,
+  canReuseMapArea,
+  type ViewRegion,
+  type ViewVenue,
+  type ViewPage,
+} from "../../lib/map-viewport";
+
 const DEFAULT_AREA: AreaSelection = { cityId: "on-20002", districtId: null };
-const RADII = [0.5, 2, 10];
 
 function areaFor(selection: AreaSelection | null) {
   return resolveArea(selection) || resolveArea(DEFAULT_AREA)!;
@@ -65,20 +74,27 @@ export default function MapScreen() {
   );
   const styles = useMemo(() => createStyles(colors), [colors]);
   const profileSelection = user ? selectionForProfile(user) : null;
-  const profileKey = [
-    user?.id || "",
-    profileSelection?.cityId || "",
-    profileSelection?.districtId || "",
-  ].join("|");
+  const savedCityId = profileSelection?.cityId || "";
+  const savedDistrictId = profileSelection?.districtId || "";
+  const profileKey = [user?.id || "", savedCityId, savedDistrictId].join("|");
+  const lastCenteredProfile = useRef(profileKey);
   const initial = areaFor(profileSelection);
   const profileLatitude = initial.coordinate.latitude;
   const profileLongitude = initial.coordinate.longitude;
   const [center, setCenter] = useState<Coordinates>(initial.coordinate);
   const [recenterKey, setRecenterKey] = useState(0);
-  const [radiusKm, setRadiusKm] = useState(10);
+  const radiusKm = 10; // Initial camera zoom only; event searches follow the viewport.
+  const [zoomRequest, setZoomRequest] = useState({ radiusKm: 10, id: 0 });
+  const [view, setView] = useState(() => ({
+    owner: profileKey,
+    region: initialMapRegion(initial.coordinate),
+  }));
+  const region =
+    view.owner === profileKey
+      ? view.region
+      : initialMapRegion(initial.coordinate);
   const [useInterests, setUseInterests] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [mapMoved, setMapMoved] = useState(false);
   const [locating, setLocating] = useState(false);
   const [locationPermission, setLocationPermission] = useState(false);
   const [locationIssue, setLocationIssue] = useState("");
@@ -94,31 +110,52 @@ export default function MapScreen() {
   const interestKey = JSON.stringify(
     interestsOnly ? [...new Set(interests)].sort() : [],
   );
-  const queryString = useMemo(
-    () =>
-      new URLSearchParams({
-        latitude: String(center.latitude),
-        longitude: String(center.longitude),
-        radiusKm: String(radiusKm),
-        days: "31",
-        interests: interestKey,
-      }).toString(),
-    [center.latitude, center.longitude, radiusKm, interestKey],
-  );
-  const queryKey = uid + "|" + queryString;
-  const [records, setRecords] = useState<{
-    key: string;
-    data: MapVenueResponse;
-  }>({
-    key: "",
-    data: { venues: [], windowDays: 31 },
+  const scope = profileKey + "|" + interestKey;
+  const rawQuery = queryForView(region, interestKey);
+  const [settledView, setSettledView] = useState({
+    query: rawQuery,
+    scope,
+    region,
   });
-  const data: MapVenueResponse =
-    records.key === queryKey ? records.data : { venues: [], windowDays: 31 };
-  const pendingCenter = useRef(center);
+  useEffect(() => {
+    // Wait for the map gesture to finish before requesting another visible area.
+    const timer = setTimeout(
+      () =>
+        setSettledView((previous) =>
+          previous.scope === scope && canReuseMapArea(previous.region, region)
+            ? previous
+            : { query: rawQuery, scope, region },
+        ),
+      400,
+    );
+    return () => clearTimeout(timer);
+  }, [rawQuery, scope, region]);
+  const queryString = settledView.query;
+  const queryReady = settledView.scope === scope;
+  const searchPending =
+    loading || !queryReady || !canReuseMapArea(settledView.region, region);
+  const queryKey = scope + "|" + queryString;
+  const completedView = useRef({ key: "", at: 0, reload: -1 });
+  const viewportFlight = useRef<Promise<ViewPage> | null>(null);
+  const [records, setRecords] = useState<{
+    scope: string;
+    query: string;
+    data: ViewPage;
+  }>({
+    scope: "",
+    query: "",
+    data: { venues: [], windowDays: 31, nextCursor: null },
+  });
+  const data: ViewPage =
+    records.scope === scope
+      ? records.data
+      : { venues: [], windowDays: 31, nextCursor: null };
   const locationRequest = useRef(0);
   const mounted = useRef(true);
-  const venues = data.venues;
+  const venues = useMemo(
+    () => visibleVenues(data.venues, region),
+    [data.venues, region],
+  );
   const selected = venues.find((venue) => venue.id === selectedId);
   const sources = data.sources || [];
   const preparing =
@@ -129,19 +166,21 @@ export default function MapScreen() {
     (source) => !source.ready && !source.refreshing,
   );
 
-  const chooseCenter = useCallback((coordinate: Coordinates) => {
-    locationRequest.current++;
-    setLocating(false);
-    setCenter({ ...coordinate });
-    setRecenterKey((value) => value + 1);
-    pendingCenter.current = coordinate;
-    setMapMoved(false);
-    setSelectedId(null);
-    setLocationIssue("");
-    setShowSettings(false);
-    setPlacesShown(8);
-    setError("");
-  }, []);
+  const chooseCenter = useCallback(
+    (coordinate: Coordinates) => {
+      locationRequest.current++;
+      setLocating(false);
+      setCenter({ ...coordinate });
+      setRecenterKey((value) => value + 1);
+      setView({ owner: profileKey, region: initialMapRegion(coordinate) });
+      setSelectedId(null);
+      setLocationIssue("");
+      setShowSettings(false);
+      setPlacesShown(8);
+      setError("");
+    },
+    [profileKey],
+  );
 
   useEffect(() => {
     setUseInterests(false);
@@ -150,14 +189,39 @@ export default function MapScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      // Each visit starts at the saved district, or the city when no district
-      // was selected. GPS is used only when My location is pressed.
-      chooseCenter({ latitude: profileLatitude, longitude: profileLongitude });
+      // Returning to this tab reuses the map and its current camera. A changed
+      // account/city/district must still start at its own saved location.
+      const changedProfile = lastCenteredProfile.current !== profileKey;
+      if (__DEV__)
+        console.log(
+          "[map-focus] " +
+            JSON.stringify({
+              cityId: savedCityId,
+              districtId: savedDistrictId,
+              action: changedProfile ? "saved-area-changed" : "reuse-map",
+              resolvedCenter: {
+                latitude: profileLatitude,
+                longitude: profileLongitude,
+              },
+            }),
+        );
+      if (changedProfile) {
+        lastCenteredProfile.current = profileKey;
+        chooseCenter({ latitude: profileLatitude, longitude: profileLongitude });
+      }
+      setLocating(false);
       return () => {
         // Ignore GPS results that finish after leaving this tab or account.
         locationRequest.current++;
       };
-    }, [profileKey, profileLatitude, profileLongitude, chooseCenter]),
+    }, [
+      profileKey,
+      savedCityId,
+      savedDistrictId,
+      profileLatitude,
+      profileLongitude,
+      chooseCenter,
+    ]),
   );
 
   useEffect(() => {
@@ -170,55 +234,169 @@ export default function MapScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      if (!uid) {
+      if (!uid || !queryReady) {
         setLoading(false);
         setError("");
         return;
       }
       let active = true,
-        busy = false;
-      setLoading(true);
-      setError("");
+        busy = false,
+        queued = false;
       async function refresh() {
         if (
           !active ||
-          busy ||
           (AppState.currentState && AppState.currentState !== "active")
         )
           return;
+        if (busy) {
+          queued = true;
+          return;
+        }
+        const saved = completedView.current;
+        if (
+          saved.key === queryKey &&
+          saved.reload === reload &&
+          Date.now() - saved.at < 180000
+        ) {
+          setLoading(false);
+          return;
+        }
         busy = true;
+        setLoading(true);
+        setError("");
         setClock(Date.now());
+        const merged = new Map<string, ViewVenue>();
+        const seenCursors = new Set<string>();
+        let cursor: string | null = null,
+          restarts = 0;
+        let lastPublish = 0;
         try {
           const account = auth.currentUser;
           if (!account || account.uid !== uid)
             throw new Error("Please sign in again.");
-          const response = await apiRequest<MapVenueResponse>(
-            account,
-            "GET",
-            undefined,
-            "/api/map/venues?" + queryString,
-          );
-          if (!Array.isArray(response.venues))
-            throw new Error(
-              "Activities are temporarily unavailable. Please try again.",
-            );
-          if (active && auth.currentUser?.uid === uid) {
-            setRecords({ key: queryKey, data: response });
-            setClock(Date.now());
-            setError("");
-          }
+          do {
+            if (!active || auth.currentUser?.uid !== uid) return;
+            if (AppState.currentState && AppState.currentState !== "active") return;
+            let response: ViewPage;
+            try {
+              // A blurred tab may still have one HTTP request finishing. Wait
+              // for it before starting this view, instead of overlapping reads.
+              while (viewportFlight.current) {
+                try { await viewportFlight.current; } catch {}
+                if (!active || auth.currentUser?.uid !== uid) return;
+              }
+              if (AppState.currentState && AppState.currentState !== "active") return;
+              const pending = apiRequest<ViewPage>(
+                account,
+                "GET",
+                undefined,
+                "/api/map/viewport?" +
+                  queryString +
+                  (cursor ? "&cursor=" + encodeURIComponent(cursor) : "") +
+                  (__DEV__ ? "&diagnostics=1" : ""),
+              );
+              viewportFlight.current = pending;
+              try {
+                response = await pending;
+              } finally {
+                if (viewportFlight.current === pending) viewportFlight.current = null;
+              }
+            } catch (issue) {
+              // A source can publish a new snapshot between result pages.
+              if (
+                (issue as { status?: number })?.status === 409 &&
+                restarts++ < 2
+              ) {
+                cursor = null;
+                merged.clear();
+                seenCursors.clear();
+                continue;
+              }
+              throw issue;
+            }
+            if (!active || auth.currentUser?.uid !== uid) return;
+            if (AppState.currentState && AppState.currentState !== "active") return;
+            if (
+              !Array.isArray(response.venues) ||
+              response.venues.some(
+                (venue) => !Array.isArray(venue.activityKeys),
+              ) ||
+              (response.nextCursor !== null &&
+                typeof response.nextCursor !== "string")
+            ) {
+              throw new Error(
+                "Activities are temporarily unavailable. Please try again.",
+              );
+            }
+            mergeViewPage(merged, response.venues);
+            cursor = response.nextCursor;
+            if (cursor && seenCursors.has(cursor))
+              throw new Error(
+                "Could not finish loading this map area. Tap Refresh.",
+              );
+            if (cursor) seenCursors.add(cursor);
+            // Merge every page, but update the native pins at most five times
+            // a second. Always publish the final page immediately.
+            if (cursor && Date.now() - lastPublish < 200) continue;
+            lastPublish = Date.now();
+            const freshPoints = [...merged.values()];
+            const morePages = cursor !== null;
+            setRecords((previous) => {
+              let points = freshPoints;
+              if (
+                morePages &&
+                previous.scope === scope &&
+                previous.query === queryString
+              ) {
+                // Keep the completed view visible during a background refresh.
+                // Fresh cumulative fragments replace old totals; they are not added twice.
+                const retained = new Map(
+                  previous.data.venues.map((venue) => [venue.id, venue]),
+                );
+                for (const venue of points) retained.set(venue.id, venue);
+                points = [...retained.values()];
+              }
+              return {
+                scope,
+                query: queryString,
+                data: { ...response, venues: points },
+              };
+            });
+            if (__DEV__ && !cursor)
+              console.log(
+                "[map-debug] " +
+                  JSON.stringify({
+                    request: queryString,
+                    loadedPlaces: merged.size,
+                    complete: cursor === null,
+                  }),
+              );
+          } while (cursor && active);
+          if (active && cursor === null)
+            completedView.current = { key: queryKey, at: Date.now(), reload };
         } catch (issue) {
           if (active)
             setError(
-              issue instanceof Error ? issue.message : "Could not load events.",
+              issue instanceof Error
+                ? issue.message
+                : "Could not finish loading places. Tap Refresh.",
             );
         } finally {
           busy = false;
-          if (active) setLoading(false);
+          if (active) {
+            setClock(Date.now());
+            setLoading(false);
+            if (queued) {
+              queued = false;
+              void refresh();
+            }
+          }
         }
       }
+      // Reuse completed, recent results on tab return. New views, expired
+      // results and the Refresh button still load all pages automatically.
       void refresh();
-      const timer = setInterval(() => void refresh(), 60000);
+      const timer = setInterval(() => void refresh(), 180000);
       const subscription = AppState.addEventListener("change", (state) => {
         if (state === "active") void refresh();
       });
@@ -227,15 +405,21 @@ export default function MapScreen() {
         clearInterval(timer);
         subscription.remove();
       };
-    }, [uid, queryKey, queryString, reload]),
+    }, [uid, queryKey, queryString, reload, scope, queryReady]),
   );
 
   const handleMapMove = useCallback(
-    (coordinate: Coordinates) => {
-      pendingCenter.current = coordinate;
-      setMapMoved(distanceKm(center, coordinate) > 0.15);
+    (next: ViewRegion) => {
+      setView((previous) => {
+        if (
+          previous.owner === profileKey &&
+          sameMapRegion(previous.region, next)
+        )
+          return previous;
+        return { owner: profileKey, region: next };
+      });
     },
-    [center],
+    [profileKey],
   );
 
   async function useCurrentLocation() {
@@ -352,39 +536,38 @@ export default function MapScreen() {
             )}
           </Pressable>
           <View
+            accessibilityRole="radiogroup"
+            accessibilityLabel="Map zoom shortcuts"
             style={styles.distancePicker}
-            accessibilityLabel="Distance from the map centre"
           >
-            {RADII.map((radius) => (
-              <Pressable
-                key={radius}
-                accessibilityRole="button"
-                accessibilityLabel={
-                  radius < 1
-                    ? "Within 500 metres"
-                    : "Within " + radius + " kilometres"
-                }
-                accessibilityState={{ selected: radiusKm === radius }}
-                style={[
-                  styles.distanceOption,
-                  radiusKm === radius && styles.activeChip,
-                ]}
-                onPress={() => {
-                  setRadiusKm(radius);
-                  setPlacesShown(8);
-                  setMapMoved(false);
-                }}
-              >
-                <Text
-                  style={[
-                    styles.distanceText,
-                    radiusKm === radius && styles.activeText,
-                  ]}
+            {([0.5, 2, 10] as const).map((distance) => {
+              const expected = initialMapRegion(region, distance).latitudeDelta;
+              const active =
+                Math.abs(region.latitudeDelta - expected) < expected * 0.08;
+              const label = distance === 0.5 ? "500m" : `${distance}km`;
+              const spokenLabel = distance === 0.5 ? "500 m" : `${distance} km`;
+              return (
+                <Pressable
+                  key={distance}
+                  accessibilityRole="radio"
+                  accessibilityLabel={`Zoom to about ${spokenLabel}`}
+                  accessibilityState={{ checked: active }}
+                  style={[styles.distanceOption, active && styles.activeChip]}
+                  onPress={() =>
+                    setZoomRequest((previous) => ({
+                      radiusKm: distance,
+                      id: previous.id + 1,
+                    }))
+                  }
                 >
-                  {radius < 1 ? "500 m" : radius + " km"}
-                </Text>
-              </Pressable>
-            ))}
+                  <Text
+                    style={[styles.distanceText, active && styles.activeText]}
+                  >
+                    {label}
+                  </Text>
+                </Pressable>
+              );
+            })}
           </View>
           <Pressable
             accessibilityRole="button"
@@ -403,6 +586,7 @@ export default function MapScreen() {
           center={center}
           recenterKey={recenterKey}
           radiusKm={radiusKm}
+          zoomRequest={zoomRequest}
           events={venues}
           selectedId={selected?.id || null}
           theme={theme}
@@ -411,16 +595,6 @@ export default function MapScreen() {
           onMove={handleMapMove}
           onSelect={setSelectedId}
         />
-        {mapMoved && (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Search this map area"
-            style={styles.searchAreaButton}
-            onPress={() => chooseCenter(pendingCenter.current)}
-          >
-            <Text style={styles.link}>Search this area</Text>
-          </Pressable>
-        )}
       </View>
       {(locationIssue ||
         error ||
@@ -492,9 +666,16 @@ export default function MapScreen() {
       )}
       {selected && (
         <LazyVenueSchedule
-          key={uid + "|" + queryString + "|" + selected.id}
+          key={uid + "|" + interestKey + "|" + selected.id}
           uid={uid}
-          queryString={queryString}
+          queryString={new URLSearchParams({
+            latitude: String(selected.coordinate.latitude),
+            longitude: String(selected.coordinate.longitude),
+            radiusKm: "0.5",
+            fresh: "1",
+            days: "31",
+            interests: interestKey,
+          }).toString()}
           venue={selected}
           styles={styles}
           clock={clock}
@@ -540,12 +721,12 @@ export default function MapScreen() {
         </Pressable>
       )}
       <Text accessibilityRole="header" style={styles.sectionTitle}>
-        {venues.length} {venues.length === 1 ? "place" : "places"} within{" "}
-        {radiusKm < 1 ? "500 m" : radiusKm + " km"}
+        {venues.length} {venues.length === 1 ? "place" : "places"} in view
+        {searchPending ? " · updating…" : ""}
       </Text>
       <Text style={styles.help}>
-        Upcoming activities for the next 31 days. Distances are straight-line
-        estimates.
+        Upcoming activities for the next 31 days. Move or zoom the map to
+        explore. Distances are measured from the map centre.
       </Text>
       {!user && (
         <View style={styles.notice}>
@@ -559,23 +740,15 @@ export default function MapScreen() {
           </Pressable>
         </View>
       )}
-      {!!user && !loading && !error && !preparing && !venues.length && (
+      {!!user && !searchPending && !error && !preparing && !venues.length && (
         <View style={styles.notice}>
-          <Text style={styles.eventTitle}>No matching activities nearby</Text>
-          <Text style={styles.body}>
-            Try a larger distance or All activities. More community calendars
-            will be added as coverage grows.
+          <Text style={styles.eventTitle}>
+            No matching activities in this view
           </Text>
-          <Pressable
-            accessibilityRole="button"
-            style={styles.textButton}
-            onPress={() => {
-              setRadiusKm(10);
-              setUseInterests(false);
-            }}
-          >
-            <Text style={styles.link}>Show all activities within 10 km</Text>
-          </Pressable>
+          <Text style={styles.body}>
+            Zoom out, move the map or choose All activities. More community
+            calendars will be added as coverage grows.
+          </Text>
         </View>
       )}
       {venues.slice(0, placesShown).map((venue) => (
@@ -716,7 +889,13 @@ function LazyVenueSchedule({
         }
       };
       request.current = load;
-      void load(null);
+      const recent = scheduleCache.get(cacheKey);
+      if (!retry && recent && recent.expires > Date.now()) {
+        accumulated = recent.events;
+        setPage(recent);
+        setLoading(false);
+        setError("");
+      } else void load(null);
       return () => {
         active = false;
         request.current = null;
@@ -725,7 +904,7 @@ function LazyVenueSchedule({
   );
   const full = useMemo(
     () => venuesFor(page.events, venue.coordinate, 1, [], false, clock)[0],
-    [page.events, venue.coordinate, clock],
+    [page.events, venue.coordinate.latitude, venue.coordinate.longitude, clock],
   );
   return (
     <View>
@@ -966,7 +1145,7 @@ function createStyles(colors: AppColors) {
       flexWrap: "wrap",
       justifyContent: "space-between",
       alignItems: "center",
-      gap: 8,
+      gap: 6,
     },
     locationButton: {
       minHeight: 44,
@@ -982,6 +1161,9 @@ function createStyles(colors: AppColors) {
     },
     locationText: { color: colors.background, fontSize: 13, fontWeight: "700" },
     distancePicker: {
+      flex: 1,
+      minWidth: 142,
+      maxWidth: 180,
       flexDirection: "row",
       padding: 2,
       gap: 2,
@@ -991,9 +1173,10 @@ function createStyles(colors: AppColors) {
       backgroundColor: colors.surface,
     },
     distanceOption: {
-      minWidth: 44,
+      flex: 1,
+      minWidth: 0,
       minHeight: 44,
-      paddingHorizontal: 6,
+      paddingHorizontal: 2,
       borderRadius: 11,
       justifyContent: "center",
       alignItems: "center",

@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Linking,
   Platform,
@@ -8,13 +8,9 @@ import {
   Text,
   View,
 } from "react-native";
-import MapView, {
-  Circle,
-  Marker,
-  type MapType,
-  type Region,
-} from "react-native-maps";
+import MapView, { Marker, type MapType, type Region } from "react-native-maps";
 import type { AppColors } from "../constants/app-colors";
+import { sameMapRegion } from "../lib/map-viewport";
 import {
   clusterMapPoints,
   regionForCluster,
@@ -31,6 +27,7 @@ export type MapPoint = {
 export type EventMapProps = {
   center: Coordinates;
   radiusKm: number;
+  zoomRequest?: { radiusKm: number; id: number };
   events: MapPoint[];
   recenterKey?: number;
   selectedId: string | null;
@@ -38,7 +35,7 @@ export type EventMapProps = {
   colors: AppColors;
   showUserLocation: boolean;
   onSelect: (id: string) => void;
-  onMove: (center: Coordinates) => void;
+  onMove: (region: Region) => void;
 };
 
 const DARK_STYLE = [
@@ -61,6 +58,7 @@ const DARK_STYLE = [
     stylers: [{ color: "#18322C" }],
   },
 ];
+const EMPTY_STYLE: typeof DARK_STYLE = [];
 
 function regionFor(center: Coordinates, radius: number): Region {
   const delta = Math.max(0.002, Math.min(120, (radius * 2.6) / 111));
@@ -74,10 +72,11 @@ function regionFor(center: Coordinates, radius: number): Region {
   };
 }
 
-export default function EventMap({
+function EventMap({
   center,
   recenterKey = 0,
   radiusKm,
+  zoomRequest,
   events,
   selectedId,
   theme,
@@ -88,14 +87,29 @@ export default function EventMap({
 }: EventMapProps) {
   const styles = useMemo(() => createStyles(colors), [colors]);
   const map = useRef<MapView>(null);
-  const initial = useRef(regionFor(center, radiusKm)).current;
+  const initial = useMemo(
+    () => regionFor(center, radiusKm),
+    [center.latitude, center.longitude, radiusKm],
+  );
+  // Keep this native instance on ordinary tab/app returns. Only a deliberate
+  // location change replaces it; marker updates and focus do not change its key.
+  const nativeKey = [
+    center.latitude,
+    center.longitude,
+    radiusKm,
+    recenterKey,
+  ].join("|");
+  const activeNativeKey = useRef(nativeKey);
+  activeNativeKey.current = nativeKey;
   const visibleRegion = useRef(initial);
   const [renderRegion, setRenderRegion] = useState(initial);
   const [mapSize, setMapSize] = useState({ width: 390, height: 500 });
-  const [ready, setReady] = useState(false);
+  const [readyKey, setReadyKey] = useState("");
+  const ready = readyKey === nativeKey;
   const [mapType, setMapType] = useState<MapType>("standard");
   const [traffic, setTraffic] = useState(false);
   const [routeError, setRouteError] = useState("");
+  const lastZoomRequest = useRef(0);
   const selected = events.find((event) => event.id === selectedId);
   const symbols = useMemo(
     () =>
@@ -111,17 +125,30 @@ export default function EventMap({
   );
 
   useEffect(() => {
-    if (!ready) return;
-    const next = regionFor(
-      { latitude: center.latitude, longitude: center.longitude },
-      radiusKm,
-    );
-    visibleRegion.current = next;
-    setRenderRegion(next);
-    map.current?.animateToRegion(next, 350);
-  }, [ready, center.latitude, center.longitude, radiusKm, recenterKey]);
+    visibleRegion.current = initial;
+    setRenderRegion(initial);
+  }, [nativeKey, initial]);
 
   useEffect(() => setRouteError(""), [selectedId]);
+
+  const commitRegion = useCallback(
+    (next: Region) => {
+      if (sameMapRegion(visibleRegion.current, next)) return;
+      visibleRegion.current = next;
+      setRenderRegion(next);
+      onMove(next);
+    },
+    [onMove],
+  );
+
+  useEffect(() => {
+    if (!ready || !zoomRequest || zoomRequest.id === lastZoomRequest.current)
+      return;
+    lastZoomRequest.current = zoomRequest.id;
+    const next = regionFor(visibleRegion.current, zoomRequest.radiusKm);
+    commitRegion(next);
+    map.current?.animateToRegion(next, 300);
+  }, [ready, zoomRequest, commitRegion]);
 
   function zoom(factor: number) {
     if (!ready) return;
@@ -137,8 +164,7 @@ export default function EventMap({
         Math.min(300, previous.longitudeDelta * factor),
       ),
     };
-    visibleRegion.current = next;
-    setRenderRegion(next);
+    commitRegion(next);
     map.current?.animateToRegion(next, 250);
   }
 
@@ -146,7 +172,7 @@ export default function EventMap({
     if (!ready || !events.length) return;
     if (events.length === 1) {
       const next = regionFor(events[0].coordinate, 1);
-      visibleRegion.current = next;
+      commitRegion(next);
       map.current?.animateToRegion(next, 350);
     } else {
       map.current?.fitToCoordinates(
@@ -162,12 +188,11 @@ export default function EventMap({
   function recenter() {
     if (!ready) return;
     const next = regionFor(center, radiusKm);
-    visibleRegion.current = next;
-    setRenderRegion(next);
+    commitRegion(next);
     map.current?.animateToRegion(next, 350);
   }
 
-  async function directions(mode: "transit" | "walking" | "driving") {
+  async function openGoogleMaps() {
     if (!selected) return;
     setRouteError("");
     const destination = encodeURIComponent(
@@ -175,7 +200,7 @@ export default function EventMap({
     );
     try {
       await Linking.openURL(
-        `https://www.google.com/maps/dir/?api=1&destination=${destination}&travelmode=${mode}`,
+        `https://www.google.com/maps/search/?api=1&query=${destination}`,
       );
     } catch {
       setRouteError("Could not open Google Maps. Please try again.");
@@ -241,13 +266,16 @@ export default function EventMap({
       </ScrollView>
       <View style={styles.canvas}>
         <MapView
+          key={nativeKey}
           ref={map}
           style={StyleSheet.absoluteFill}
           initialRegion={initial}
           mapType={mapType}
           userInterfaceStyle={theme}
           customMapStyle={
-            theme === "dark" && mapType === "standard" ? DARK_STYLE : []
+            theme === "dark" && mapType === "standard"
+              ? DARK_STYLE
+              : EMPTY_STYLE
           }
           showsUserLocation={showUserLocation}
           showsMyLocationButton={false}
@@ -261,22 +289,24 @@ export default function EventMap({
           moveOnMarkerPress={false}
           onLayout={({ nativeEvent }) => {
             const { width, height } = nativeEvent.layout;
-            if (width > 0 && height > 0) setMapSize({ width, height });
+            if (width > 0 && height > 0)
+              setMapSize((old) =>
+                old.width === width && old.height === height
+                  ? old
+                  : { width, height },
+              );
           }}
-          onMapReady={() => setReady(true)}
+          onMapReady={() => {
+            if (activeNativeKey.current === nativeKey) {
+              setReadyKey(nativeKey);
+              onMove(initial);
+            }
+          }}
           onRegionChangeComplete={(region) => {
-            visibleRegion.current = region;
-            setRenderRegion(region);
-            onMove({ latitude: region.latitude, longitude: region.longitude });
+            if (activeNativeKey.current !== nativeKey) return;
+            commitRegion(region);
           }}
         >
-          <Circle
-            center={center}
-            radius={radiusKm * 1000}
-            strokeColor={colors.accent}
-            fillColor="rgba(22,121,108,0.06)"
-            strokeWidth={1}
-          />
           {symbols.map((symbol) =>
             symbol.kind === "cluster" ? (
               <ClusterMarker
@@ -285,8 +315,7 @@ export default function EventMap({
                 colors={colors}
                 onPress={() => {
                   const next = regionForCluster(symbol, visibleRegion.current);
-                  visibleRegion.current = next;
-                  setRenderRegion(next);
+                  commitRegion(next);
                   map.current?.animateToRegion(next, 300);
                 }}
               />
@@ -299,6 +328,7 @@ export default function EventMap({
                 description={symbol.point.location}
                 pinColor={selectedId === symbol.id ? "#E87561" : "#16796C"}
                 zIndex={selectedId === symbol.id ? 2 : 1}
+                tracksViewChanges={false}
                 onPress={() => onSelect(symbol.id)}
               />
             ),
@@ -336,30 +366,23 @@ export default function EventMap({
       </View>
       {selected ? (
         <View style={styles.selection}>
-          <Text numberOfLines={1} style={styles.eventTitle}>
-            {selected.title}
-          </Text>
-          <Text numberOfLines={1} style={styles.place}>
-            {selected.location}
-          </Text>
-          <View style={styles.routes}>
-            {(
-              [
-                { mode: "transit", label: "Transit" },
-                { mode: "walking", label: "Walk" },
-                { mode: "driving", label: "Drive" },
-              ] as const
-            ).map((item) => (
-              <Pressable
-                key={item.mode}
-                accessibilityRole="button"
-                accessibilityLabel={`${item.label} directions to ${selected.title}`}
-                style={styles.routeButton}
-                onPress={() => void directions(item.mode)}
-              >
-                <Text style={styles.toolText}>{item.label}</Text>
-              </Pressable>
-            ))}
+          <View style={styles.selectionRow}>
+            <View style={styles.selectionDetails}>
+              <Text numberOfLines={1} style={styles.eventTitle}>
+                {selected.title}
+              </Text>
+              <Text numberOfLines={1} style={styles.place}>
+                {selected.location}
+              </Text>
+            </View>
+            <Pressable
+              accessibilityRole="link"
+              accessibilityLabel={`Open ${selected.title} in Google Maps`}
+              style={styles.mapsLink}
+              onPress={() => void openGoogleMaps()}
+            >
+              <Text style={styles.mapsLinkText}>Open in Google Maps ↗</Text>
+            </Pressable>
           </View>
           {!!routeError && (
             <Text accessibilityRole="alert" style={styles.place}>
@@ -375,55 +398,28 @@ export default function EventMap({
     </View>
   );
 }
+export default memo(EventMap);
 
 const ClusterMarker = memo(function ClusterMarker({
   symbol,
-  colors,
   onPress,
 }: {
   symbol: Extract<MapSymbol<MapPoint>, { kind: "cluster" }>;
   colors: AppColors;
   onPress: () => void;
 }) {
-  const [tracking, setTracking] = useState(true);
-  useEffect(() => {
-    setTracking(true);
-    const timer = setTimeout(() => setTracking(false), 300);
-    return () => clearTimeout(timer);
-  }, [symbol.count, colors.accent, colors.background]);
   return (
     <Marker
       identifier={symbol.id}
       coordinate={symbol.coordinate}
-      title={symbol.count + " places"}
-      description="Tap to zoom in and choose a place"
-      tracksViewChanges={tracking}
+      title={`${symbol.count} places`}
+      description="Group of places. Tap to zoom in."
+      accessibilityLabel={`${symbol.count} places. Tap to zoom in.`}
+      pinColor="#4285F4"
+      tracksViewChanges={false}
       onPress={onPress}
       zIndex={3}
-    >
-      <View
-        collapsable={false}
-        accessible
-        accessibilityLabel={symbol.count + " places. Tap to zoom in."}
-        style={{
-          minWidth: 46,
-          height: 46,
-          paddingHorizontal: 8,
-          borderRadius: 23,
-          backgroundColor: colors.accent,
-          borderWidth: 3,
-          borderColor: colors.background,
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        <Text
-          style={{ color: colors.background, fontWeight: "800", fontSize: 17 }}
-        >
-          {symbol.count}
-        </Text>
-      </View>
-    </Marker>
+    />
   );
 });
 
@@ -467,15 +463,19 @@ function createStyles(colors: AppColors) {
     },
     eventTitle: { color: colors.text, fontSize: 16, fontWeight: "700" },
     place: { color: colors.muted, fontSize: 13 },
-    routes: { flexDirection: "row", gap: 8, marginTop: 4 },
-    routeButton: {
-      flex: 1,
+    selectionRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+    selectionDetails: { flex: 1, minWidth: 0, gap: 3 },
+    mapsLink: {
+      maxWidth: "47%",
       minHeight: 44,
       justifyContent: "center",
-      alignItems: "center",
-      borderRadius: 10,
-      borderWidth: 1,
-      borderColor: colors.border,
+      paddingVertical: 4,
+    },
+    mapsLinkText: {
+      color: colors.accent,
+      fontSize: 14,
+      fontWeight: "700",
+      textAlign: "right",
     },
     hint: { color: colors.muted, fontSize: 13, padding: 10 },
   });
