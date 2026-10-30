@@ -1,5 +1,6 @@
 const { externalEventService } = require("./external-events");
 const { installMapRoutes } = require("./map-routes");
+const { groupEventScope, readMemberEvents } = require("./group-event-access");
 
 function distanceKm(a, b) {
   const rad = (n) => (n * Math.PI) / 180;
@@ -101,7 +102,8 @@ function installEventRoutes(
 ) {
   if (typeof service.readMapSummaries === "function")
     installMapRoutes(app, db, { now, external: service });
-  // Cache by search area, never by account. These are published public events.
+  // Only public calendar records share the area cache. Membership and group
+  // events are checked afresh for the authenticated account below.
   const cache = new Map();
   async function load(options) {
     const cacheKey = [
@@ -112,22 +114,10 @@ function installEventRoutes(
     const previous = cache.get(cacheKey);
     if (previous && previous.expires > now()) return previous.promise;
     const promise = (async () => {
-      const [external, groups] = await Promise.all([
-        service.read(options),
-        // Single-field range: no composite Firestore index or migration needed.
-        // Query the geographic band first; filter radius/dates BEFORE any limit.
-        db
-          .collection("events")
-          .where("latitude", ">=", options.minLat)
-          .where("latitude", "<=", options.maxLat)
-          .get(),
-      ]);
+      const external = await service.read(options);
       return {
         sources: external.sources,
-        events: [
-          ...external.events,
-          ...groups.docs.map(serializeGroupEvent).filter(Boolean),
-        ],
+        events: external.events,
       };
     })().catch((error) => {
       cache.delete(cacheKey);
@@ -146,10 +136,18 @@ function installEventRoutes(
       return res.status(400).json({ message: error.message });
     }
     try {
-      const result = await load(options);
+      const scope = await groupEventScope(db, req.account?.uid);
+      const [result, groupDocs] = await Promise.all([
+        load(options),
+        readMemberEvents(db, scope),
+      ]);
       const seen = new Set();
-      const events = result.events
+      const events = [
+        ...result.events,
+        ...groupDocs.map(serializeGroupEvent).filter(Boolean),
+      ]
         .filter((event) => {
+          if (event.origin === "group" && !scope.allows(event)) return false;
           if (!inArea(event, options) || seen.has(event.id)) return false;
           seen.add(event.id);
           return true;
@@ -166,6 +164,8 @@ function installEventRoutes(
         windowDays: Number(req.query.days || 31),
       });
     } catch (error) {
+      if (error.status)
+        return res.status(error.status).json({ message: error.message });
       next(error);
     }
   });

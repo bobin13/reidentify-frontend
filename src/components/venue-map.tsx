@@ -13,7 +13,7 @@ export default function VenueMap({
   center: Point;
   pin: Point | null;
   theme: "light" | "dark";
-  onMove: (point: Point) => void;
+  onMove?: (point: Point) => void;
   onPick: (point: Point) => void;
 }) {
   const map = useRef<MapView>(null),
@@ -40,8 +40,14 @@ export default function VenueMap({
         showsCompass
         zoomControlEnabled
         onMapReady={() => setReady(true)}
-        onRegionChangeComplete={(region) =>
-          onMove({ latitude: region.latitude, longitude: region.longitude })
+        onRegionChangeComplete={
+          onMove
+            ? (region) =>
+                onMove({
+                  latitude: region.latitude,
+                  longitude: region.longitude,
+                })
+            : undefined
         }
         onPress={(event) => onPick(event.nativeEvent.coordinate)}
       >
@@ -50,3 +56,4 @@ export default function VenueMap({
     </View>
   );
 }
+

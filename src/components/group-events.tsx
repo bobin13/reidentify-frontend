@@ -3,25 +3,35 @@ import { useFocusEffect } from "expo-router";
 import {
   ActivityIndicator,
   Alert,
+  Keyboard,
+  DeviceEventEmitter,
   Linking,
   Modal,
-  Platform,
   Pressable,
   ScrollView,
+  StyleSheet,
   Text,
   TextInput,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import * as Location from "expo-location";
 import VenueMap from "./venue-map";
 type Coordinates = { latitude: number; longitude: number };
+type VenueSuggestion = {
+  id: string;
+  name: string;
+  address: string;
+  location: string;
+  coordinate: Coordinates;
+};
+import { useAuth } from "../context/auth-context";
 import { useAppTheme } from "../context/theme-context";
 import {
   dateLabel,
   groupError,
   groupPath,
   groupRequest,
+  groupMapState,
   requestId,
   type GroupEvent,
 } from "../lib/groups";
@@ -98,8 +108,8 @@ export function GroupEvents({
         Meet in person
       </Text>
       <Text style={s.body}>
-        Any member can organize an event at a public venue. Events are also
-        visible on the public activity map.
+        Any member can organize an event at a public venue. Only group members
+        can see these events on the map.
       </Text>
       <GroupButton
         label="Organize an event"
@@ -153,7 +163,7 @@ export function GroupEvents({
                 onPress={() =>
                   Alert.alert(
                     "Cancel this event?",
-                    "It will be removed from upcoming group events and the public map.",
+                    "It will no longer appear in group events or on members' maps.",
                     [
                       { text: "Keep event", style: "cancel" },
                       {
@@ -204,6 +214,8 @@ function EventForm({
 }) {
   const { s, colors } = useGroupStyles(),
     { theme } = useAppTheme();
+  const { user } = useAuth();
+  const savedCenter = user?.location?.coordinate;
   const tomorrow = new Date(Date.now() + 86400000);
   const originalDate = initial ? new Date(initial.startsAt) : tomorrow;
   const [year, setYear] = useState(originalDate.getFullYear()),
@@ -231,14 +243,13 @@ function EventForm({
       : null,
   );
   const [mapCenter, setMapCenter] = useState<Coordinates>(
-    coordinate || { latitude: 43.6532, longitude: -79.3832 },
+    coordinate || savedCenter || { latitude: 43.6532, longitude: -79.3832 },
   );
-  const moved = useRef(mapCenter);
   const [finding, setFinding] = useState(false),
     [saving, setSaving] = useState(false),
     [error, setError] = useState("");
   const [choice, setChoice] = useState<
-    "year" | "month" | "day" | "start" | "end" | null
+    "date" | "year" | "month" | "start" | "end" | null
   >(null);
   const id = useRef(initial?.requestId || requestId()),
     lock = useRef(false),
@@ -267,6 +278,21 @@ function EventForm({
     }),
   }));
   const years = [new Date().getFullYear(), new Date().getFullYear() + 1];
+  const selectedDate = new Date(year, month, day).toLocaleDateString(
+    undefined,
+    {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    },
+  );
+  const firstWeekday = new Date(year, month, 1).getDay();
+  const weekdays = Array.from({ length: 7 }, (_, n) =>
+    new Date(2026, 0, 4 + n).toLocaleDateString(undefined, {
+      weekday: "short",
+    }),
+  );
   const times = Array.from({ length: 48 }, (_, n) => ({
     value: n * 30,
     label: timeLabel(n * 30),
@@ -276,14 +302,9 @@ function EventForm({
       ? years.map((n) => ({ value: n, label: String(n) }))
       : choice === "month"
         ? months
-        : choice === "day"
-          ? Array.from({ length: days }, (_, n) => ({
-              value: n + 1,
-              label: String(n + 1),
-            }))
-          : times.filter((t) =>
-              choice === "end" ? t.value > start : t.value < 1410,
-            );
+        : times.filter((t) =>
+            choice === "end" ? t.value > start : t.value < 1410,
+          );
   function select(value: number) {
     if (choice === "year") {
       setYear(value);
@@ -293,46 +314,13 @@ function EventForm({
       setMonth(value);
       setDay(Math.min(day, new Date(year, value + 1, 0).getDate()));
     }
-    if (choice === "day") setDay(value);
+    if (choice === "date") setDay(value);
     if (choice === "start") {
       setStart(value);
       if (end <= value) setEnd(Math.min(1410, value + 60));
     }
     if (choice === "end") setEnd(value);
-    setChoice(null);
-  }
-  async function findAddress() {
-    if (finding || !location.trim()) return;
-    setFinding(true);
-    setError("");
-    try {
-      if (Platform.OS === "android") {
-        const permission = await Location.requestForegroundPermissionsAsync();
-        if (!permission.granted)
-          throw new Error(
-            "Address search needs location permission on Android. You can also move the map to the public venue and use its centre.",
-          );
-      }
-      const results = await Location.geocodeAsync(location.trim());
-      if (!results.length)
-        throw new Error(
-          "Address not found. Include the town and province, or move the map to the venue.",
-        );
-      if (alive.current) {
-        const point = {
-          latitude: results[0].latitude,
-          longitude: results[0].longitude,
-        };
-        setMapCenter(point);
-        moved.current = point;
-        setCoordinate(point);
-        setConfirmed(false);
-      }
-    } catch (e) {
-      if (alive.current) setError(groupError(e));
-    } finally {
-      if (alive.current) setFinding(false);
-    }
+    setChoice(choice === "year" || choice === "month" ? "date" : null);
   }
   async function save() {
     if (lock.current) return;
@@ -371,7 +359,14 @@ function EventForm({
         longitude: coordinate.longitude,
         publicVenueConfirmed: confirmed,
       });
-      if (alive.current) onSaved();
+      if (alive.current) {
+        groupMapState.pendingFocus = { uid, coordinate: { ...coordinate } };
+        DeviceEventEmitter.emit("reidentify:group-event-published", {
+          uid,
+          coordinate: { ...coordinate },
+        });
+        onSaved();
+      }
     } catch (e) {
       if (alive.current) setError(groupError(e));
     } finally {
@@ -392,9 +387,17 @@ function EventForm({
           <>
             <View style={s.content}>
               <GroupButton
-                label="Back to event"
+                label={
+                  choice === "month" || choice === "year"
+                    ? "Back to calendar"
+                    : "Back to event"
+                }
                 secondary
-                onPress={() => setChoice(null)}
+                onPress={() =>
+                  setChoice(
+                    choice === "month" || choice === "year" ? "date" : null,
+                  )
+                }
               />
               <Text style={s.heading}>
                 Choose{" "}
@@ -406,14 +409,89 @@ function EventForm({
               </Text>
             </View>
             <ScrollView contentContainerStyle={s.content}>
-              {choices.map((item) => (
-                <GroupButton
-                  key={item.value}
-                  label={item.label}
-                  secondary
-                  onPress={() => select(item.value)}
-                />
-              ))}
+              {choice === "date" ? (
+                <>
+                  <View style={formStyles.row}>
+                    <View style={formStyles.column}>
+                      <GroupButton
+                        label={months[month].label}
+                        secondary
+                        onPress={() => setChoice("month")}
+                      />
+                    </View>
+                    <View style={formStyles.column}>
+                      <GroupButton
+                        label={String(year)}
+                        secondary
+                        onPress={() => setChoice("year")}
+                      />
+                    </View>
+                  </View>
+                  <View style={formStyles.calendar}>
+                    {weekdays.map((label, n) => (
+                      <View key={`weekday-${n}`} style={formStyles.weekday}>
+                        <Text style={[s.muted, formStyles.centered]}>
+                          {label}
+                        </Text>
+                      </View>
+                    ))}
+                    {Array.from({ length: firstWeekday }, (_, n) => (
+                      <View key={`empty-${n}`} style={formStyles.dayCell} />
+                    ))}
+                    {Array.from({ length: days }, (_, n) => n + 1).map(
+                      (value) => (
+                        <Pressable
+                          key={value}
+                          accessibilityRole="radio"
+                          accessibilityLabel={new Date(
+                            year,
+                            month,
+                            value,
+                          ).toLocaleDateString(undefined, {
+                            weekday: "long",
+                            month: "long",
+                            day: "numeric",
+                            year: "numeric",
+                          })}
+                          accessibilityState={{ checked: day === value }}
+                          onPress={() => select(value)}
+                          style={({ pressed }) => [
+                            formStyles.dayCell,
+                            {
+                              backgroundColor:
+                                day === value ? colors.accent : colors.surface,
+                            },
+                            pressed && formStyles.pressed,
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              s.label,
+                              {
+                                color:
+                                  day === value
+                                    ? colors.background
+                                    : colors.text,
+                              },
+                            ]}
+                          >
+                            {value}
+                          </Text>
+                        </Pressable>
+                      ),
+                    )}
+                  </View>
+                </>
+              ) : (
+                choices.map((item) => (
+                  <GroupButton
+                    key={item.value}
+                    label={item.label}
+                    secondary
+                    onPress={() => select(item.value)}
+                  />
+                ))
+              )}
             </ScrollView>
           </>
         ) : (
@@ -432,8 +510,8 @@ function EventForm({
                 {initial ? "Edit your event" : "Organize an event"}
               </Text>
               <Text style={s.body}>
-                Choose a public meeting place. The event and its location will
-                appear on the public map.
+                Choose a public meeting place. Only group members can see this
+                event.
               </Text>
               <Text style={s.label}>Event title</Text>
               <TextInput
@@ -444,118 +522,95 @@ function EventForm({
                 onChangeText={setTitle}
                 editable={!saving}
               />
-              <Text style={s.label}>Date</Text>
-              <View style={s.row}>
+              <View style={formStyles.schedule}>
+                <Text style={s.label}>Date and time</Text>
                 <GroupButton
-                  label={months[month].label}
+                  label={selectedDate}
                   secondary
                   disabled={saving}
-                  onPress={() => setChoice("month")}
+                  onPress={() => setChoice("date")}
                 />
-                <GroupButton
-                  label={`Day ${day}`}
-                  secondary
-                  disabled={saving}
-                  onPress={() => setChoice("day")}
-                />
-                <GroupButton
-                  label={String(year)}
-                  secondary
-                  disabled={saving}
-                  onPress={() => setChoice("year")}
-                />
-              </View>
-              <GroupButton
-                label={`Starts: ${timeLabel(start)}`}
-                secondary
-                disabled={saving}
-                onPress={() => setChoice("start")}
-              />
-              <GroupButton
-                label={`Ends: ${timeLabel(end)}`}
-                secondary
-                disabled={saving}
-                onPress={() => setChoice("end")}
-              />
-              <Text style={s.muted}>
-                Times use your device's local time. Choose a date within the
-                next year. This form schedules an event within one day.
-              </Text>
-              <Text style={s.label}>Public venue and full address</Text>
-              <TextInput
-                accessibilityLabel="Event venue and address"
-                style={s.input}
-                value={location}
-                onChangeText={changeLocation}
-                maxLength={200}
-                editable={!saving}
-                placeholder="For example, a library or community centre"
-                placeholderTextColor={colors.muted}
-              />
-              <GroupButton
-                label={finding ? "Finding address…" : "Find address on map"}
-                secondary
-                disabled={finding || saving || !location.trim()}
-                onPress={() => void findAddress()}
-              />
-              <View
-                style={{ height: 260, borderRadius: 16, overflow: "hidden" }}
-              >
-                <VenueMap
-                  center={mapCenter}
-                  pin={coordinate}
-                  theme={theme}
-                  onPick={(point) => {
-                    setCoordinate(point);
-                    setConfirmed(false);
-                  }}
-                  onMove={(point) => {
-                    moved.current = point;
-                  }}
-                />
-                <View
-                  pointerEvents="none"
-                  style={{
-                    position: "absolute",
-                    left: "50%",
-                    top: "50%",
-                    marginLeft: -14,
-                    marginTop: -20,
-                  }}
-                >
-                  <Text style={{ color: colors.text, fontSize: 32 }}>＋</Text>
+                <View style={formStyles.row}>
+                  {(["start", "end"] as const).map((kind) => (
+                    <Pressable
+                      key={kind}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${kind === "start" ? "Starts" : "Ends"}: ${timeLabel(kind === "start" ? start : end)}. Change time.`}
+                      accessibilityState={{ disabled: saving }}
+                      disabled={saving}
+                      onPress={() => setChoice(kind)}
+                      style={({ pressed }) => [
+                        formStyles.timeControl,
+                        {
+                          backgroundColor: colors.surface,
+                          borderColor: colors.border,
+                        },
+                        pressed && formStyles.pressed,
+                      ]}
+                    >
+                      <Text style={s.muted}>
+                        {kind === "start" ? "Starts" : "Ends"}
+                      </Text>
+                      <Text style={s.label}>
+                        {timeLabel(kind === "start" ? start : end)}
+                      </Text>
+                    </Pressable>
+                  ))}
                 </View>
               </View>
-              <Text style={s.muted}>
-                Tap the public venue to place the meeting pin. You can also move
-                the map and use its centre.
-              </Text>
-              <GroupButton
-                label="Use map centre as meeting point"
-                secondary
+              <Text style={s.label}>Public meeting place</Text>
+              <VenueSearch
+                uid={uid}
+                value={location}
+                onChangeText={changeLocation}
+                center={savedCenter || mapCenter}
+                hasPoint={!!coordinate}
                 disabled={saving}
-                onPress={() => {
-                  setCoordinate({ ...moved.current });
+                onBusyChange={setFinding}
+                onSelect={(place) => {
+                  setLocation(place.location);
+                  setCoordinate(place.coordinate);
+                  setMapCenter(place.coordinate);
                   setConfirmed(false);
+                  setError("");
                 }}
               />
+              <View style={formStyles.mapSection}>
+                <View style={formStyles.map}>
+                  <VenueMap
+                    center={mapCenter}
+                    pin={coordinate}
+                    theme={theme}
+                    onPick={(point) => {
+                      setCoordinate(point);
+                      setConfirmed(false);
+                    }}
+                  />
+                </View>
+                <Text style={s.muted}>
+                  Tap the map to choose the meeting point.
+                </Text>
+              </View>
               <Pressable
                 accessibilityRole="checkbox"
-                accessibilityState={{ checked: confirmed, disabled: saving }}
-                disabled={saving}
+                accessibilityState={{
+                  checked: confirmed,
+                  disabled: saving || finding || !coordinate,
+                }}
+                disabled={saving || finding || !coordinate}
                 onPress={() => setConfirmed(!confirmed)}
-                style={s.check}
+                style={formStyles.publicCheck}
               >
-                <Text style={s.body}>
-                  {confirmed ? "☑" : "☐"} I checked the meeting point. This is a
-                  public venue, not a private home.
+                <Text style={[s.body, formStyles.publicCheckText]}>
+                  {confirmed ? "☑" : "☐"} This is a public meeting place.
                 </Text>
               </Pressable>
               <Text style={s.label}>Description (optional)</Text>
               <TextInput
                 accessibilityLabel="Event description"
-                style={s.input}
+                style={[s.input, formStyles.descriptionInput]}
                 multiline
+                textAlignVertical="top"
                 maxLength={2000}
                 value={description}
                 onChangeText={setDescription}
@@ -580,3 +635,281 @@ function EventForm({
     </Modal>
   );
 }
+
+function VenueSearch({
+  uid,
+  value,
+  center,
+  hasPoint,
+  disabled,
+  onChangeText,
+  onSelect,
+  onBusyChange,
+}: {
+  uid: string;
+  value: string;
+  center: Coordinates;
+  hasPoint: boolean;
+  disabled: boolean;
+  onChangeText: (value: string) => void;
+  onSelect: (place: VenueSuggestion) => void;
+  onBusyChange: (busy: boolean) => void;
+}) {
+  const { s, colors } = useGroupStyles();
+  const [result, setResult] = useState<{
+    key: string;
+    suggestions: VenueSuggestion[];
+    message: string;
+  }>({ key: "", suggestions: [], message: "" });
+  const [loading, setLoading] = useState(false);
+  const [retry, setRetry] = useState(0);
+  const query = value.trim();
+  const key = `${uid}|${query}|${center.latitude}|${center.longitude}`;
+  const resultMatches = result.key === key;
+
+  useEffect(() => {
+    let active = true;
+    setResult({ key: "", suggestions: [], message: "" });
+    setLoading(false);
+    onBusyChange(false);
+    if (disabled || hasPoint || query.length < 3) return;
+    setLoading(true);
+    const timer = setTimeout(() => {
+      onBusyChange(true);
+      const params = new URLSearchParams({
+        q: query,
+        latitude: String(center.latitude),
+        longitude: String(center.longitude),
+      });
+      void groupRequest<{ suggestions: VenueSuggestion[] }>(
+        uid,
+        `/api/places/suggestions?${params.toString()}`,
+      )
+        .then((data) => {
+          if (!active) return;
+          if (!Array.isArray(data.suggestions))
+            throw new Error("Venue suggestions are temporarily unavailable.");
+          setResult({
+            key,
+            suggestions: data.suggestions.slice(0, 5),
+            message: data.suggestions.length
+              ? ""
+              : "No matching places. Add the city or full street address.",
+          });
+        })
+        .catch((error) => {
+          if (active)
+            setResult({ key, suggestions: [], message: groupError(error) });
+        })
+        .finally(() => {
+          if (active) {
+            setLoading(false);
+            onBusyChange(false);
+          }
+        });
+    }, 650);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+      onBusyChange(false);
+    };
+  }, [
+    uid,
+    query,
+    center.latitude,
+    center.longitude,
+    disabled,
+    hasPoint,
+    retry,
+    key,
+    onBusyChange,
+  ]);
+
+  return (
+    <View style={formStyles.venueSearch}>
+      <View
+        style={[
+          formStyles.searchField,
+          { backgroundColor: colors.surface, borderColor: colors.border },
+        ]}
+      >
+        <TextInput
+          accessibilityLabel="Event venue and address"
+          accessibilityHint="Type at least three characters, then choose an address or venue from the suggestions."
+          style={[s.body, formStyles.searchInput]}
+          value={value}
+          onChangeText={onChangeText}
+          maxLength={200}
+          editable={!disabled}
+          placeholder="Search a venue or street address"
+          placeholderTextColor={colors.muted}
+          autoCorrect={false}
+          returnKeyType="search"
+          onSubmitEditing={() => setRetry((number) => number + 1)}
+        />
+        {!!value && (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Clear venue search"
+            accessibilityState={{ disabled }}
+            disabled={disabled}
+            onPress={() => onChangeText("")}
+            style={formStyles.clearSearch}
+          >
+            <Text style={[s.label, { color: colors.muted }]}>×</Text>
+          </Pressable>
+        )}
+      </View>
+      {!hasPoint && query.length >= 3 && (
+        <View
+          style={[
+            formStyles.suggestions,
+            { backgroundColor: colors.surface, borderColor: colors.border },
+          ]}
+        >
+          {loading && (
+            <View
+              style={formStyles.searchStatus}
+              accessibilityLiveRegion="polite"
+            >
+              <ActivityIndicator color={colors.accent} />
+              <Text style={s.muted}>Searching places…</Text>
+            </View>
+          )}
+          {resultMatches &&
+            result.suggestions.map((place) => (
+              <Pressable
+                key={place.id}
+                accessibilityRole="button"
+                accessibilityLabel={`Choose ${place.name}. ${place.address}`}
+                accessibilityState={{ disabled }}
+                disabled={disabled}
+                onPress={() => {
+                  onBusyChange(false);
+                  Keyboard.dismiss();
+                  onSelect(place);
+                }}
+                style={({ pressed }) => [
+                  formStyles.suggestion,
+                  { borderBottomColor: colors.border },
+                  pressed && formStyles.pressed,
+                ]}
+              >
+                <Text style={s.label}>{place.name}</Text>
+                <Text style={s.muted}>{place.address}</Text>
+              </Pressable>
+            ))}
+          {resultMatches && !!result.message && (
+            <View style={formStyles.venueSearch}>
+              <Text
+                style={[s.muted, formStyles.searchMessage]}
+                accessibilityLiveRegion="polite"
+              >
+                {result.message}
+              </Text>
+              <GroupButton
+                label="Search again"
+                secondary
+                disabled={disabled}
+                onPress={() => setRetry((number) => number + 1)}
+              />
+            </View>
+          )}
+        </View>
+      )}
+      <Text style={[s.muted, formStyles.attribution]}>
+        Search data:{" "}
+        <Text
+          accessibilityRole="link"
+          onPress={() => {
+            void Linking.openURL(
+              "https://www.openstreetmap.org/copyright",
+            ).catch(() => {});
+          }}
+        >
+          © OpenStreetMap contributors
+        </Text>
+        {" · "}
+        <Text
+          accessibilityRole="link"
+          onPress={() => {
+            void Linking.openURL("https://photon.komoot.io/").catch(() => {});
+          }}
+        >
+          Photon
+        </Text>
+      </Text>
+    </View>
+  );
+}
+
+const formStyles = StyleSheet.create({
+  venueSearch: { gap: 8 },
+  searchField: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderRadius: 14,
+  },
+  searchInput: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 56,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  clearSearch: {
+    minWidth: 48,
+    minHeight: 52,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  suggestions: { borderWidth: 1, borderRadius: 14, overflow: "hidden" },
+  suggestion: {
+    minHeight: 68,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    gap: 4,
+    borderBottomWidth: 1,
+  },
+  searchStatus: {
+    minHeight: 56,
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 14,
+    gap: 10,
+  },
+  searchMessage: { padding: 14 },
+  attribution: { fontSize: 13, lineHeight: 19 },
+  schedule: { gap: 8 },
+  row: { flexDirection: "row", gap: 10 },
+  column: { flex: 1, minWidth: 0 },
+  timeControl: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 72,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    gap: 4,
+    borderWidth: 1,
+    borderRadius: 14,
+    justifyContent: "center",
+  },
+  calendar: { flexDirection: "row", flexWrap: "wrap" },
+  weekday: { width: "14.285714%", minHeight: 36, justifyContent: "center" },
+  dayCell: {
+    width: "14.285714%",
+    minHeight: 48,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 12,
+    borderRadius: 10,
+  },
+  centered: { textAlign: "center" },
+  publicCheck: { minHeight: 44, paddingVertical: 4, justifyContent: "center" },
+  publicCheckText: { fontSize: 14, lineHeight: 20 },
+  descriptionInput: { minHeight: 160, paddingTop: 12 },
+  mapSection: { gap: 8 },
+  map: { height: 260, borderRadius: 16, overflow: "hidden" },
+  pressed: { opacity: 0.72 },
+});

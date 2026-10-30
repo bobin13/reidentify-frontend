@@ -5,6 +5,7 @@ import * as Location from "expo-location";
 import {
   ActivityIndicator,
   AppState,
+  DeviceEventEmitter,
   Linking,
   Pressable,
   ScrollView,
@@ -20,6 +21,7 @@ import { useAuth } from "../../context/auth-context";
 import { useAppTheme } from "../../context/theme-context";
 import { auth } from "../../lib/firebase";
 import { apiRequest } from "../../lib/api";
+import { groupMapState } from "../../lib/groups";
 import {
   resolveArea,
   selectionForProfile,
@@ -81,18 +83,23 @@ export default function MapScreen() {
   const initial = areaFor(profileSelection);
   const profileLatitude = initial.coordinate.latitude;
   const profileLongitude = initial.coordinate.longitude;
-  const [center, setCenter] = useState<Coordinates>(initial.coordinate);
+  const pendingFocus = groupMapState.pendingFocus;
+  const startingCoordinate =
+    pendingFocus && pendingFocus.uid === user?.id
+      ? pendingFocus.coordinate
+      : initial.coordinate;
+  const [center, setCenter] = useState<Coordinates>(startingCoordinate);
   const [recenterKey, setRecenterKey] = useState(0);
   const radiusKm = 10; // Initial camera zoom only; event searches follow the viewport.
   const [zoomRequest, setZoomRequest] = useState({ radiusKm: 10, id: 0 });
   const [view, setView] = useState(() => ({
     owner: profileKey,
-    region: initialMapRegion(initial.coordinate),
+    region: initialMapRegion(startingCoordinate),
   }));
   const region =
     view.owner === profileKey
       ? view.region
-      : initialMapRegion(initial.coordinate);
+      : initialMapRegion(startingCoordinate);
   const [useInterests, setUseInterests] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [locating, setLocating] = useState(false);
@@ -205,9 +212,17 @@ export default function MapScreen() {
               },
             }),
         );
-      if (changedProfile) {
+      const target = groupMapState.pendingFocus;
+      if (target?.uid === uid) {
+        groupMapState.pendingFocus = null;
         lastCenteredProfile.current = profileKey;
-        chooseCenter({ latitude: profileLatitude, longitude: profileLongitude });
+        chooseCenter(target.coordinate);
+      } else if (changedProfile) {
+        lastCenteredProfile.current = profileKey;
+        chooseCenter({
+          latitude: profileLatitude,
+          longitude: profileLongitude,
+        });
       }
       setLocating(false);
       return () => {
@@ -215,6 +230,7 @@ export default function MapScreen() {
         locationRequest.current++;
       };
     }, [
+      uid,
       profileKey,
       savedCityId,
       savedDistrictId,
@@ -229,8 +245,47 @@ export default function MapScreen() {
     return () => {
       mounted.current = false;
       locationRequest.current++;
+      scheduleCache.clear();
     };
   }, []);
+
+  useEffect(() => {
+    const subscription = DeviceEventEmitter.addListener(
+      "reidentify:group-map-changed",
+      (owner: string) => {
+        if (owner !== uid) return;
+        completedView.current = { key: "", at: 0, reload: -1 };
+        scheduleCache.clear();
+        setSelectedId(null);
+        setRecords({
+          scope: "",
+          query: "",
+          data: { venues: [], windowDays: 31, nextCursor: null },
+        });
+        setReload((value) => value + 1);
+      },
+    );
+    const published = DeviceEventEmitter.addListener(
+      "reidentify:group-event-published",
+      (event: { uid: string; coordinate: Coordinates }) => {
+        if (
+          event.uid === uid &&
+          Number.isFinite(event.coordinate?.latitude) &&
+          Number.isFinite(event.coordinate?.longitude)
+        ) {
+          groupMapState.pendingFocus = {
+            uid,
+            coordinate: { ...event.coordinate },
+          };
+          chooseCenter(event.coordinate);
+        }
+      },
+    );
+    return () => {
+      subscription.remove();
+      published.remove();
+    };
+  }, [uid, chooseCenter]);
 
   useFocusEffect(
     useCallback(() => {
@@ -276,16 +331,20 @@ export default function MapScreen() {
             throw new Error("Please sign in again.");
           do {
             if (!active || auth.currentUser?.uid !== uid) return;
-            if (AppState.currentState && AppState.currentState !== "active") return;
+            if (AppState.currentState && AppState.currentState !== "active")
+              return;
             let response: ViewPage;
             try {
               // A blurred tab may still have one HTTP request finishing. Wait
               // for it before starting this view, instead of overlapping reads.
               while (viewportFlight.current) {
-                try { await viewportFlight.current; } catch {}
+                try {
+                  await viewportFlight.current;
+                } catch {}
                 if (!active || auth.currentUser?.uid !== uid) return;
               }
-              if (AppState.currentState && AppState.currentState !== "active") return;
+              if (AppState.currentState && AppState.currentState !== "active")
+                return;
               const pending = apiRequest<ViewPage>(
                 account,
                 "GET",
@@ -299,7 +358,8 @@ export default function MapScreen() {
               try {
                 response = await pending;
               } finally {
-                if (viewportFlight.current === pending) viewportFlight.current = null;
+                if (viewportFlight.current === pending)
+                  viewportFlight.current = null;
               }
             } catch (issue) {
               // A source can publish a new snapshot between result pages.
@@ -315,7 +375,8 @@ export default function MapScreen() {
               throw issue;
             }
             if (!active || auth.currentUser?.uid !== uid) return;
-            if (AppState.currentState && AppState.currentState !== "active") return;
+            if (AppState.currentState && AppState.currentState !== "active")
+              return;
             if (
               !Array.isArray(response.venues) ||
               response.venues.some(

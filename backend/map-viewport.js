@@ -1,7 +1,9 @@
 const { createHash } = require("node:crypto");
-const { groupMapIndex } = require("./map-geography");
+const { groupEventScope } = require("./group-event-access");
 const DAY = 86400000,
   STEP = 0.05;
+const SOURCE_CACHE_MS = 20000;
+const PLAN_VERSION = 3;
 const GROUP_FIELDS = [
   "title",
   "location",
@@ -11,9 +13,9 @@ const GROUP_FIELDS = [
   "startsAt",
   "endsAt",
   "status",
+  "groupId",
   "interests",
   "timeZone",
-  "mapCell",
 ];
 const hash = (value) =>
   createHash("sha256").update(value).digest("hex").slice(0, 24);
@@ -109,28 +111,37 @@ function groupRows(bounds) {
     if (west > east) continue;
     const x0 = Math.floor((west + 180) / STEP),
       x1 = Math.floor((east + 180) / STEP);
-    if (west === -95.5 && east === -74) {
-      // A province-wide view can use one continuous index range instead of
-      // hundreds of empty per-row queries. Exact bounds are still checked.
+    const y0 = Math.floor((south + 90) / STEP),
+      y1 = Math.floor((north + 90) / STEP);
+    if (y1 - y0 + 1 > 8) {
+      // Coalesce wide/tall views even when they omit an edge of Ontario.
+      // Interior rows also read other longitudes; contains() below filters
+      // those records to the exact viewport. All matches remain paginated.
       jobs.push({
         kind: "group",
-        low: Math.floor((south + 90) / STEP) + ":" + x0,
-        high: Math.floor((north + 90) / STEP) + ":" + x1,
+        low: y0 + ":" + x0,
+        high: y1 + ":" + x1,
       });
       continue;
     }
-    for (
-      let y = Math.floor((south + 90) / STEP);
-      y <= Math.floor((north + 90) / STEP);
-      y++
-    )
+    for (let y = y0; y <= y1; y++)
       jobs.push({ kind: "group", low: y + ":" + x0, high: y + ":" + x1 });
   }
   return jobs;
 }
 function decodeCursor(raw, options, version, now, jobs) {
   if (!raw)
-    return { at: now, job: 0, last: "", cell: "", key: options.key, version };
+    return {
+      at: now,
+      job: 0,
+      last: "",
+      cell: "",
+      key: options.key,
+      version,
+      pages: 0,
+      documents: 0,
+      queries: 0,
+    };
   let cursor;
   try {
     if (
@@ -161,30 +172,51 @@ function decodeCursor(raw, options, version, now, jobs) {
     now - cursor.at > 10 * 60 * 1000
   )
     throw fail("The map results changed. Reload this view.", 409);
+  if (
+    [cursor.pages, cursor.documents, cursor.queries].some(
+      (value) => !Number.isSafeInteger(value) || value < 0,
+    )
+  )
+    throw fail("Invalid map page. Refresh the map.");
   if (cursor.job >= jobs.length)
     throw fail("Invalid map page. Refresh the map.");
   const job = jobs[cursor.job];
-  if (
-    job.kind === "group" &&
-    cursor.last &&
-    (cursor.cell < job.low || cursor.cell > job.high)
-  )
-    throw fail("Invalid map page.");
+  if (job.kind === "group" && cursor.cell) throw fail("Invalid map page.");
   return cursor;
 }
 function createViewportService(
   db,
-  { now = Date.now, sources, index = groupMapIndex(db), logger = console } = {},
+  { now = Date.now, sources, index = { ready: true }, logger = console } = {},
 ) {
   sources ||= require("./external-events").SOURCES;
-  async function page(options, rawCursor) {
-    index.ensure?.();
-    const clock = now();
-    const snapshots = await Promise.all(
+  let sourceMetadata = null;
+  let readBlockedUntil = 0,
+    readFailure = null;
+  function snapshotsForView() {
+    if (sourceMetadata && sourceMetadata.expires > now())
+      return sourceMetadata.promise;
+    const entry = { expires: Infinity, promise: null };
+    sourceMetadata = entry;
+    entry.promise = Promise.all(
       sources.map((source) =>
         db.collection("externalEventSources").doc(source.id).get(),
       ),
-    );
+    )
+      .then((snapshots) => {
+        entry.expires = now() + SOURCE_CACHE_MS;
+        return snapshots;
+      })
+      .catch((error) => {
+        if (sourceMetadata === entry) sourceMetadata = null;
+        throw error;
+      });
+    return entry.promise;
+  }
+  async function loadPage(options, rawCursor, uid) {
+    const scope = await groupEventScope(db, uid);
+    index.ensure?.();
+    const clock = now();
+    const snapshots = await snapshotsForView();
     const statuses = [],
       jobs = [],
       versions = [];
@@ -230,8 +262,8 @@ function createViewportService(
           cells: cells.slice(offset, offset + 20),
         });
     });
-    jobs.push(...groupRows(options.bounds));
-    const version = hash(JSON.stringify(versions));
+    jobs.push(...scope.ids.map((groupId) => ({ kind: "group", groupId })));
+    const version = hash(JSON.stringify([PLAN_VERSION, versions, scope.key]));
     const cursor = decodeCursor(rawCursor, options, version, clock, jobs);
     const start = cursor.at,
       end = start + options.days * DAY;
@@ -288,7 +320,7 @@ function createViewportService(
       bytes < 2 * 1024 * 1024
     ) {
       const job = jobs[cursor.job],
-        limit = Math.min(job.kind === "external" ? 8 : 30, 120 - docs);
+        limit = Math.min(job.kind === "external" ? 32 : 30, 120 - docs);
       let query;
       if (job.kind === "external") {
         const collection = db
@@ -307,13 +339,11 @@ function createViewportService(
       } else {
         query = db
           .collection("events")
-          .where("mapCell", ">=", job.low)
-          .where("mapCell", "<=", job.high)
-          .orderBy("mapCell")
+          .where("groupId", "==", job.groupId)
           .orderBy("__name__")
           .select(...GROUP_FIELDS)
           .limit(limit);
-        if (cursor.last) query = query.startAfter(cursor.cell, cursor.last);
+        if (cursor.last) query = query.startAfter(cursor.last);
       }
       const found = await query.get();
       queries++;
@@ -332,7 +362,7 @@ function createViewportService(
         if (job.kind === "external") {
           for (const event of value.sessions || [])
             add(event, value, job.source);
-        } else if (value.status === "published") {
+        } else if (value.status === "published" && scope.allows(value)) {
           add(
             {
               ...value,
@@ -345,7 +375,7 @@ function createViewportService(
           );
         }
         cursor.last = doc.id;
-        cursor.cell = job.kind === "group" ? value.mapCell : "";
+        cursor.cell = "";
       }
       if (stopped) break;
       if (found.docs.length < limit) {
@@ -360,25 +390,25 @@ function createViewportService(
       activityCount: item.activityKeys.size,
       distance: 0,
     }));
+    cursor.pages++;
+    cursor.documents += docs;
+    cursor.queries += queries;
     const nextCursor =
       cursor.job < jobs.length
         ? Buffer.from(JSON.stringify(cursor)).toString("base64url")
         : null;
-    if (options.diagnostics)
+    if (options.diagnostics && nextCursor === null)
       logger.log(
         "[maps-debug] " +
           JSON.stringify({
             mode: "viewport",
-            bounds: options.bounds,
-            pageDocuments: docs,
-            pageQueries: queries,
-            returnedPlaces: venues.length,
-            morePages: nextCursor !== null,
-            imported: sources.map((source, i) => ({
-              id: source.id,
-              venues: snapshots[i].data()?.stats?.venues || 0,
-              sessions: snapshots[i].data()?.stats?.sessions || 0,
-            })),
+            pages: cursor.pages,
+            documents: cursor.documents,
+            queries: cursor.queries,
+            sourceCount: sources.length,
+            unavailableSources: statuses.filter((source) => !source.ready)
+              .length,
+            elapsedMs: Math.max(0, now() - start),
           }),
       );
     return {
@@ -389,6 +419,25 @@ function createViewportService(
       indexing: !index.ready,
     };
   }
+  async function page(options, rawCursor, uid) {
+    if (readFailure && now() < readBlockedUntil) throw readFailure;
+    try {
+      return await loadPage(options, rawCursor, uid);
+    } catch (error) {
+      if (
+        [8, "8", "resource-exhausted", "RESOURCE_EXHAUSTED"].includes(
+          error.code,
+        )
+      ) {
+        // Repeated zoom/refresh requests must not immediately hammer a service
+        // that has already reported a resource/quota limit. Do not cache a
+        // partial successful page or turn the failure into an empty result.
+        readFailure = error;
+        readBlockedUntil = now() + 60000;
+      }
+      throw error;
+    }
+  }
   return { page };
 }
 function installViewportRoute(app, db, dependencies = {}) {
@@ -397,7 +446,11 @@ function installViewportRoute(app, db, dependencies = {}) {
     try {
       res.set("Cache-Control", "no-store");
       res.json(
-        await service.page(viewportOptions(req.query), req.query.cursor),
+        await service.page(
+          viewportOptions(req.query),
+          req.query.cursor,
+          req.account?.uid,
+        ),
       );
     } catch (error) {
       error.status

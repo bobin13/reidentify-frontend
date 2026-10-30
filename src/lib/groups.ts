@@ -1,5 +1,13 @@
 import { auth } from "./firebase";
 import { apiRequest } from "./api";
+import { DeviceEventEmitter } from "react-native";
+
+export const groupMapState: {
+  pendingFocus: {
+    uid: string;
+    coordinate: { latitude: number; longitude: number };
+  } | null;
+} = { pendingFocus: null };
 
 export type CommunityGroup = {
   id: string;
@@ -69,7 +77,14 @@ export async function groupRequest<T>(
   const result = await apiRequest<T>(account, method, body, path);
   if (auth.currentUser?.uid !== uid)
     throw new Error("Your account changed. Please try again.");
-  return result;
+if (
+  method === "POST" &&
+  /^\/api\/groups\/[^/?]+\/(?:join|leave|delete|events(?:\/[^/?]+\/cancel)?)$/.test(
+    path.split("?")[0],
+  )
+) {
+  DeviceEventEmitter.emit("reidentify:group-map-changed", uid);
+}  return result;
 }
 export const groupPath = (id: string) =>
   `/api/groups/${encodeURIComponent(id)}`;

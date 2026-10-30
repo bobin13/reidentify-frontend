@@ -13,6 +13,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../context/auth-context";
 import { INTEREST_CATEGORIES } from "../constants/interests";
+import { resolveArea, selectionForProfile } from "../lib/locations";
 import {
   groupError,
   groupRequest,
@@ -421,7 +422,9 @@ export function GroupDirectory({ search }: { search: string }) {
         <CreateGroup
           key={uid}
           uid={uid}
-          initialArea={user.area}
+          initialCity={
+            resolveArea(selectionForProfile(user))?.city || "Ontario"
+          }
           onClose={() => setCreating(false)}
           onCreated={(id) => {
             setCreating(false);
@@ -436,12 +439,12 @@ export function GroupDirectory({ search }: { search: string }) {
 
 function CreateGroup({
   uid,
-  initialArea,
+  initialCity,
   onClose,
   onCreated,
 }: {
   uid: string;
-  initialArea: string;
+  initialCity: string;
   onClose: () => void;
   onCreated: (id: string) => void;
 }) {
@@ -450,17 +453,17 @@ function CreateGroup({
   const [interest, setInterest] = useState("");
   const [category, setCategory] = useState("");
   const [choosing, setChoosing] = useState(true);
-  const [number] = useState(() => Math.floor(1000 + Math.random() * 9000));
+  const [number] = useState(() => Math.floor(100000 + Math.random() * 900000));
   const [similar, setSimilar] = useState<CommunityGroup[]>([]);
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   const id = useRef(requestId()),
     lock = useRef(false),
     alive = useRef(true);
-  const area = initialArea.trim() || "Ontario";
-  const ending = ` – ${interest} – ${number}`;
+  const city = (initialCity.trim() || "Ontario").replace(/\s+/g, "");
+  const ending = `-${interest.replace(/\s+/g, "")}-${number}`;
   const suggestion = interest
-    ? `${area.slice(0, Math.max(1, 80 - ending.length))}${ending}`
+    ? `${city.slice(0, Math.max(1, 80 - ending.length))}${ending}`
     : "";
   const name = customName ?? suggestion;
   const canCreate =
@@ -538,16 +541,8 @@ function CreateGroup({
           <Text accessibilityRole="header" style={s.title}>
             Create a community group
           </Text>
-          <Text style={s.body}>
-            Everyone has equal membership. Anyone can find and join this public
-            group.
-          </Text>
           <Text accessibilityRole="header" style={s.heading}>
             1. Choose one activity
-          </Text>
-          <Text style={s.muted}>
-            Each group focuses on one activity. You can join several groups for
-            your different interests.
           </Text>
           {!!interest && (
             <View style={s.notice} accessibilityLiveRegion="polite">
@@ -613,11 +608,6 @@ function CreateGroup({
             placeholder="Choose an activity for a suggested name"
             placeholderTextColor={colors.muted}
           />
-          <Text style={s.muted}>
-            {initialArea.trim()
-              ? `The suggested name uses your saved area (${area}), activity and a short number. You can change the name.`
-              : "The suggested name uses Ontario, your activity and a short number. You can change the name."}
-          </Text>
           {!!suggestion && customName !== null && name !== suggestion && (
             <GroupButton
               label="Use suggested name"
@@ -644,9 +634,8 @@ function CreateGroup({
             </View>
           )}
           <Text style={s.muted}>
-            The group name and activity stay fixed after creation. Groups and
-            chat history are deleted after 45 days without activity, with a
-            seven-day warning and protection for scheduled events.
+            Groups and chat history are deleted after 45 days without activity,
+            with a seven-day warning.
           </Text>
           {!!error && (
             <Text accessibilityRole="alert" style={s.body}>

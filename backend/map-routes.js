@@ -1,11 +1,7 @@
 const { installViewportRoute } = require("./map-viewport");
 const { createHash } = require("node:crypto");
-const {
-  cellsFor,
-  readCells,
-  busyArea,
-  groupMapIndex,
-} = require("./map-geography");
+const { groupEventScope, readMemberEvents } = require("./group-event-access");
+const { cellsFor, busyArea } = require("./map-geography");
 const DAY = 86400000,
   PAGE = 60,
   MAX_VENUES = 2000;
@@ -129,15 +125,11 @@ function groupEvent(doc) {
 
 function createMapService(
   db,
-  {
-    external,
-    now = Date.now,
-    index = groupMapIndex(db, { now }),
-    logger = console,
-  } = {},
+  { external, now = Date.now, index = { ready: true }, logger = console } = {},
 ) {
   const cache = new Map();
-  async function load(options) {
+  async function load(options, uid) {
+    const scope = await groupEventScope(db, uid);
     index.ensure?.();
     const cacheKey = options.cells.join("|");
     const old = cache.get(cacheKey);
@@ -151,24 +143,6 @@ function createMapService(
           options.cells,
           budget,
         );
-        const groupDocs = await readCells(
-          db.collection("events"),
-          options.cells,
-          [
-            "title",
-            "location",
-            "venueName",
-            "latitude",
-            "longitude",
-            "startsAt",
-            "endsAt",
-            "status",
-            "groupId",
-            "interests",
-            "timeZone",
-          ],
-          budget,
-        );
         const item = cache.get(cacheKey);
         if (item) item.bytes = 6 * 1024 * 1024 - budget.remainingBytes;
         let totalBytes = [...cache.values()].reduce(
@@ -180,7 +154,11 @@ function createMapService(
           totalBytes -= cache.get(first).bytes || 0;
           cache.delete(first);
         }
-        return { out, groupDocs };
+        return {
+          out,
+          remainingDocs: budget.remainingDocs,
+          remainingBytes: budget.remainingBytes,
+        };
       })().catch((error) => {
         cache.delete(cacheKey);
         throw error;
@@ -189,7 +167,27 @@ function createMapService(
       if (cache.size > 12) cache.delete(cache.keys().next().value);
       raw = await promise;
     }
-    const { out, groupDocs } = raw;
+    const { out } = raw;
+    // Only public source records share the area cache. Group events are read
+    // afresh for this account so new events and membership changes take effect.
+    const groupDocs = await readMemberEvents(
+      db,
+      scope,
+      [
+        "title",
+        "location",
+        "venueName",
+        "latitude",
+        "longitude",
+        "startsAt",
+        "endsAt",
+        "status",
+        "groupId",
+        "interests",
+        "timeZone",
+      ],
+      { remainingDocs: raw.remainingDocs, remainingBytes: raw.remainingBytes },
+    );
     const entries = new Map();
     const counters = new Map();
     function counter(sourceId) {
@@ -264,7 +262,7 @@ function createMapService(
         add(event, record, record.ref, "external");
     for (const doc of groupDocs) {
       const event = groupEvent(doc);
-      if (event)
+      if (event && scope.allows(event))
         add(
           event,
           { ...doc.data(), venueName: event.venueName },
@@ -312,11 +310,12 @@ function createMapService(
       sources: out.sources,
       indexing: !index.ready,
       diagnostics,
+      scope,
     };
   }
 
-  async function summaries(options) {
-    const data = await load(options);
+  async function summaries(options, uid) {
+    const data = await load(options, uid);
     if (options.diagnostics)
       logger.log("[maps-debug] " + JSON.stringify(data.diagnostics));
     return {
@@ -336,8 +335,8 @@ function createMapService(
       ...(options.diagnostics ? { diagnostics: data.diagnostics } : {}),
     };
   }
-  async function schedule(options, id, cursor) {
-    const data = await load(options),
+  async function schedule(options, id, cursor, uid) {
+    const data = await load(options, uid),
       entry = data.entries.get(id);
     if (!entry)
       throw Object.assign(
@@ -373,7 +372,7 @@ function createMapService(
       for (const doc of docs)
         if (doc.exists) {
           const event = groupEvent(doc);
-          if (event) events.push(event);
+          if (event && data.scope.allows(event)) events.push(event);
         }
     }
     const seen = new Set();
@@ -384,7 +383,12 @@ function createMapService(
           longitude: e.coordinate?.longitude,
           location: e.location,
         };
-        if (!eligible(e, place, options) || seen.has(e.id)) return false;
+        if (
+          (e.origin === "group" && !data.scope.allows(e)) ||
+          !eligible(e, place, options) ||
+          seen.has(e.id)
+        )
+          return false;
         seen.add(e.id);
         return true;
       })
@@ -392,7 +396,7 @@ function createMapService(
         (a, b) =>
           a.startsAt.localeCompare(b.startsAt) || a.id.localeCompare(b.id),
       );
-    const version = hash(JSON.stringify(filtered));
+    const version = hash(JSON.stringify([data.scope.key, filtered]));
     let offset = 0;
     if (cursor) {
       let value;
@@ -458,12 +462,17 @@ function installMapRoutes(app, db, dependencies) {
   };
   app.get(
     "/api/map/venues",
-    handle((_req, options) => service.summaries(options)),
+    handle((req, options) => service.summaries(options, req.account?.uid)),
   );
   app.get(
     "/api/map/venues/:id/events",
     handle((req, options) =>
-      service.schedule(options, req.params.id, req.query.cursor),
+      service.schedule(
+        options,
+        req.params.id,
+        req.query.cursor,
+        req.account?.uid,
+      ),
     ),
   );
 }

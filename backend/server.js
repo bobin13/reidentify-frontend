@@ -11,6 +11,8 @@ const { getAuth } = require("firebase-admin/auth");
 const { getFirestore } = require("firebase-admin/firestore");
 const { cities } = require("../shared/ontario-areas.json");
 const cityIndex = new Map(cities.map((city) => [city.id, city]));
+const { installPlaceRoutes } = require("./places-routes");
+
 
 function resolveLocation(input) {
   if (!input || typeof input !== "object" || Array.isArray(input)) return null;
@@ -238,6 +240,7 @@ function createApp({ db, firebaseAuth }) {
     res.json({ user });
   });
 
+  installPlaceRoutes(app);
   installNewsRoutes(app);
   installGroupRoutes(app, db);
   installMessagingRoutes(app, db);
@@ -249,25 +252,54 @@ function createApp({ db, firebaseAuth }) {
     });
   });
 
-  app.use((error, _req, res, _next) => {
-    if (error.type === "entity.parse.failed") {
-      return res.status(400).json({
-        message: "Send valid JSON.",
-      });
-    }
-
-    if (error.type === "entity.too.large") {
-      return res.status(413).json({
-        message: "Request is too large.",
-      });
-    }
-
-    console.error("Request failed:", error.code || error.message);
-
-    res.status(500).json({
-      message: "Something went wrong. Try again.",
+app.use((error, req, res, _next) => {
+  if (error.type === "entity.parse.failed") {
+    return res.status(400).json({
+      message: "Send valid JSON.",
     });
+  }
+
+  if (error.type === "entity.too.large") {
+    return res.status(413).json({
+      message: "Request is too large.",
+    });
+  }
+
+  console.error(
+    "Request failed:",
+    JSON.stringify({
+      method: req.method,
+      path: req.path,
+      code: error.code ?? null,
+      message: String(
+        error.message || "Unknown error",
+      ).slice(0, 1200),
+      ...(typeof error.details === "string"
+        ? { details: error.details.slice(0, 1200) }
+        : {}),
+    }),
+  );
+
+  if (
+    [
+      8,
+      "8",
+      "resource-exhausted",
+      "RESOURCE_EXHAUSTED",
+    ].includes(error.code)
+  ) {
+    res.set("Retry-After", "60");
+
+    return res.status(503).json({
+      message:
+        "ReIdentify has reached a service limit. Please try again later.",
+    });
+  }
+
+  res.status(500).json({
+    message: "Something went wrong. Try again.",
   });
+});
 
   return app;
 }
