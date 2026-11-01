@@ -1,6 +1,5 @@
 const express = require("express");
 const { createHash, randomUUID } = require("node:crypto");
-const { createDrivePhotoStore } = require("./google-drive-photos");
 
 const MAX_PHOTO = 200 * 1024;
 const validId = (value) =>
@@ -18,7 +17,12 @@ function profileExtras(data = {}) {
         : null,
     profileVisibility:
       data.profileVisibility === "public" ? "public" : "private",
-    photoVersion: validId(data.photoVersion) ? data.photoVersion : null,
+    // Legacy Drive references stay in the database until the next photo change,
+    // but are not advertised as readable Firestore photos.
+    photoVersion:
+      data.photoStorage === "firestore" && validId(data.photoVersion)
+        ? data.photoVersion
+        : null,
   };
 }
 
@@ -93,11 +97,7 @@ function cleanPhoto(text) {
   }
 }
 
-function installProfileRoutes(
-  app,
-  db,
-  { toOwner, store = createDrivePhotoStore(), now = Date.now } = {},
-) {
+function installProfileRoutes(app, db, { toOwner, now = Date.now } = {}) {
   const cache = new Map(),
     active = new Map(),
     usage = new Map();
@@ -119,6 +119,8 @@ function installProfileRoutes(
     usage.set(uid, entry);
   }
   const owned = (uid) => db.collection("users").doc(uid);
+  // Keep image bytes out of users documents, member lists and profile queries.
+  const photoFor = (uid) => db.collection("profilePhotos").doc(uid);
   async function allowed(viewer, uid) {
     if (!validId(uid)) throw fail("Profile not found.", 404);
     const snapshot = await owned(uid).get();
@@ -166,15 +168,31 @@ function installProfileRoutes(
       // Always check current permission before using a cached photo.
       const data = await allowed(req.account.uid, req.params.uid);
       const version = profileExtras(data).photoVersion;
-      if (!version || !data.photoFileId || req.query.version !== version)
+      if (!version || req.query.version !== version)
         throw fail("Photo not found.", 404);
       const key = `${req.params.uid}:${version}`;
       let bytes;
       const saved = cache.get(key);
       if (saved && saved.expires > now()) bytes = saved.bytes;
       else {
-        bytes = await store.get(data.photoFileId);
-        if (bytes.length > MAX_PHOTO || bytes[0] !== 0xff || bytes[1] !== 0xd8)
+        const snapshot = await photoFor(req.params.uid).get();
+        const photo = snapshot.exists ? snapshot.data() : null;
+        if (!photo || photo.version !== version)
+          throw fail("Photo not found.", 404);
+        if (
+          photo.ownerId !== req.params.uid ||
+          photo.contentType !== "image/jpeg" ||
+          !(photo.jpeg instanceof Uint8Array)
+        )
+          throw fail("Photo is unavailable.", 503);
+        bytes = Buffer.from(photo.jpeg);
+        if (
+          bytes.length < 4 ||
+          bytes.length > MAX_PHOTO ||
+          photo.byteLength !== bytes.length ||
+          bytes[0] !== 0xff ||
+          bytes[1] !== 0xd8
+        )
           throw fail("Photo is unavailable.", 503);
         for (const [id, value] of cache)
           if (value.expires <= now()) cache.delete(id);
@@ -187,71 +205,57 @@ function installProfileRoutes(
 
   async function change(uid, operation, jpeg, remove, hash) {
     const ref = owned(uid);
-    let reservedId = null;
-    const initial = await ref.get();
-    if (!initial.exists)
-      throw fail("Save your profile before uploading a photo.", 404);
-    if (!remove && !initial.data().photoFileId)
-      reservedId = await store.newId();
-    let fileId,
-      existing,
-      repeated = false;
-    await db.runTransaction(async (tx) => {
+    const photoRef = photoFor(uid);
+    // Stable across transaction retries; neither storage nor other services are
+    // touched outside this transaction.
+    const version = remove ? null : randomUUID();
+    const updatedAt = new Date(now());
+    const saved = await db.runTransaction(async (tx) => {
       const snap = await tx.get(ref);
-      if (!snap.exists) throw fail("Profile not found.", 404);
+      if (!snap.exists)
+        throw fail("Save your profile before uploading a photo.", 404);
       const data = snap.data();
-      if (!remove && data.photoRequestId === operation && data.photoVersion) {
+      if (
+        !remove &&
+        data.photoStorage === "firestore" &&
+        data.photoRequestId === operation &&
+        validId(data.photoVersion)
+      ) {
         if (data.photoHash !== hash)
           throw fail("Choose the photo again before uploading it.", 409);
-        repeated = true;
-        return;
+        return data;
       }
+      // Allow an in-flight change from the previous backend version to finish.
       if (data.photoLock?.until > now())
         throw fail("A photo change is already in progress. Please wait.", 409);
-      fileId = data.photoFileId || reservedId;
-      existing = !!data.photoVersion;
-      if (!remove && !fileId) throw fail("Please retry the photo upload.", 409);
-      tx.set(
-        ref,
-        {
-          photoLock: { id: operation, until: now() + 60000 },
-          ...(remove ? {} : { photoFileId: fileId }),
-        },
-        { merge: true },
-      );
-    });
-    if (repeated) return toOwner({ uid }, (await ref.get()).data());
-    try {
       if (remove) {
-        if (fileId) await store.remove(fileId);
-      } else await store.put(fileId, jpeg, existing, uid);
-      const user = await db.runTransaction(async (tx) => {
-        const snap = await tx.get(ref),
-          data = snap.data();
-        if (data?.photoLock?.id !== operation)
-          throw fail("The photo changed. Please try again.", 409);
-        const changes = {
-          photoFileId: remove ? null : fileId,
-          photoVersion: remove ? null : randomUUID(),
-          photoRequestId: remove ? null : operation,
-          photoHash: remove ? null : hash,
-          photoLock: null,
-        };
-        tx.set(ref, changes, { merge: true });
-        return toOwner({ uid }, { ...data, ...changes });
-      });
-      for (const key of cache.keys())
-        if (key.startsWith(uid + ":")) cache.delete(key);
-      return user;
-    } finally {
-      await db
-        .runTransaction(async (tx) => {
-          const snap = await tx.get(ref);
-          if (snap.data()?.photoLock?.id === operation)
-            tx.set(ref, { photoLock: null }, { merge: true });
-        })
-        .catch(() => {});
-    }
+        tx.delete(photoRef);
+      } else {
+        // Buffer is stored by the Admin SDK as Firestore Bytes, not Base64 text.
+        tx.set(photoRef, {
+          ownerId: uid,
+          contentType: "image/jpeg",
+          jpeg,
+          byteLength: jpeg.length,
+          version,
+          updatedAt,
+        });
+      }
+      const changes = {
+        photoStorage: remove ? null : "firestore",
+        photoVersion: version,
+        photoRequestId: remove ? null : operation,
+        photoHash: remove ? null : hash,
+        // Clear obsolete Drive references without modifying anything in Drive.
+        photoFileId: null,
+        photoLock: null,
+      };
+      tx.set(ref, changes, { merge: true });
+      return { ...data, ...changes };
+    });
+    for (const key of cache.keys())
+      if (key.startsWith(uid + ":")) cache.delete(key);
+    return toOwner({ uid }, saved);
   }
 
   const mutation = (remove) =>
@@ -273,7 +277,7 @@ function installProfileRoutes(
           ? createHash("sha256").update(jpeg).digest("hex")
           : "";
         const user = await change(uid, operation, jpeg, remove, hash);
-        // Email is supplied by Firebase Auth, never by the image request or Drive.
+        // Email is supplied by Firebase Auth, never by the photo request.
         user.email = req.account.email || "";
         res.json({ user });
       } finally {
