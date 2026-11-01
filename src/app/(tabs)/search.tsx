@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { router, useLocalSearchParams } from "expo-router";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { GroupDirectory } from "../../components/community-groups";
 import {
   ActivityIndicator,
+  Image,
   Keyboard,
   KeyboardAvoidingView,
   Modal,
@@ -25,56 +26,43 @@ import {
 } from "../../constants/interests";
 import { useAuth } from "../../context/auth-context";
 import { useAppTheme } from "../../context/theme-context";
+import { ApiError, apiRequest } from "../../lib/api";
+import { auth } from "../../lib/firebase";
 
 type Section = "interests" | "groups" | "people";
 type Person = {
   id: string;
-  name: string;
+  fullName: string;
   area: string;
-  description: string;
   interests: string[];
-  info: string;
 };
+type PublicProfile = Person & {
+  aboutMe: string;
+  age: number | null;
+  profileVisibility: "public" | "private";
+  photoVersion: string | null;
+};
+type PeoplePage = { people: Person[]; nextCursor: string | null };
 
-// Existing preview people. Replace with real people when discovery is connected.
-const PEOPLE: Person[] = [
-  {
-    id: "riley",
-    name: "Riley Chen",
-    area: "Etobicoke, Toronto",
-    description:
-      "Enjoys relaxed park walks and tending a small garden. Looking forward to meeting neighbours with similar interests.",
-    interests: ["Walking", "Gardening", "Nature outings"],
-    info: "English, Mandarin",
-  },
-  {
-    id: "samira",
-    name: "Samira Khan",
-    area: "Etobicoke, Toronto",
-    description:
-      "Enjoys volunteering, sharing recipes and helping with community activities. Always happy to learn something new.",
-    interests: ["Volunteering", "Cooking", "Community events"],
-    info: "English, Urdu",
-  },
-  {
-    id: "theo",
-    name: "Theo Martin",
-    area: "Toronto",
-    description:
-      "A music enthusiast who enjoys local concerts, museum visits and discovering different cultures.",
-    interests: ["Listening to music", "Concerts", "Museums"],
-    info: "English, French",
-  },
-  {
-    id: "ava",
-    name: "Ava Brooks",
-    area: "Etobicoke, Toronto",
-    description:
-      "Enjoys a good book, friendly discussions and learning new skills. Interested in finding a local book club.",
-    interests: ["Reading", "Book clubs", "Lectures/classes"],
-    info: "English",
-  },
-];
+function accountFor(uid: string) {
+  const account = auth.currentUser;
+  if (!account || account.uid !== uid) throw new Error("Please sign in again.");
+  return account;
+}
+function initials(name: string) {
+  return name
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((word) => word[0])
+    .join("")
+    .toUpperCase();
+}
+function errorMessage(error: unknown) {
+  return error instanceof Error
+    ? error.message
+    : "Could not load. Please try again.";
+}
 
 function normalize(value: string) {
   return value
@@ -100,7 +88,12 @@ export default function SearchScreen() {
   const [section, setSection] = useState<Section>("interests");
   const [category, setCategory] = useState<InterestCategory | null>(null);
   const [query, setQuery] = useState("");
-  const [person, setPerson] = useState<Person | null>(null);
+  const [person, setPerson] = useState<string | null>(null);
+  const closePerson = useCallback(() => setPerson(null), []);
+  const [unavailable, setUnavailable] = useState<string[]>([]);
+  const markUnavailable = useCallback((id: string) => {
+    setUnavailable((ids) => (ids.includes(id) ? ids : [...ids, id]));
+  }, []);
   const [draft, setDraft] = useState<{
     owner: string;
     values: string[];
@@ -126,20 +119,6 @@ export default function SearchScreen() {
     (value) => !recognizedInterests([value]).length,
   );
   const shownInterests = showAll ? selected : selected.slice(0, 6);
-  const words = normalize(query).split(/\s+/).filter(Boolean);
-  const matches = PEOPLE.filter((entry) => {
-    const text = normalize(
-      [
-        entry.name,
-        entry.area,
-        entry.description,
-        entry.info,
-        ...entry.interests,
-      ].join(" "),
-    );
-    return words.every((word) => text.includes(word));
-  });
-
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -157,6 +136,7 @@ export default function SearchScreen() {
     );
     setCategory(null);
     setPerson(null);
+    setUnavailable([]);
     setFeedback(null);
     setShowAll(false);
   }, [uid]);
@@ -462,6 +442,7 @@ export default function SearchScreen() {
                   onChangeText={setQuery}
                   autoCapitalize="none"
                   autoCorrect={false}
+                  maxLength={100}
                   returnKeyType="search"
                   onSubmitEditing={() => Keyboard.dismiss()}
                   selectionColor={colors.accent}
@@ -480,55 +461,14 @@ export default function SearchScreen() {
               {section === "groups" ? (
                 <GroupDirectory search={query} />
               ) : (
-                <>
-                  <Text style={styles.body}>
-                    Preview: these are sample profiles.
-                  </Text>
-                  <Text accessibilityLiveRegion="polite" style={styles.body}>
-                    {matches.length}{" "}
-                    {matches.length === 1 ? "person" : "people"} found
-                  </Text>
-                  {matches.map((entry) => (
-                    <Pressable
-                      key={entry.id}
-                      accessibilityRole="button"
-                      accessibilityLabel={`Open person details for ${entry.name}`}
-                      onPress={() => {
-                        Keyboard.dismiss();
-                        setPerson(entry);
-                      }}
-                      style={({ pressed }) => [
-                        styles.category,
-                        pressed && styles.pressed,
-                      ]}
-                    >
-                      <View style={styles.iconBox}>
-                        <Text style={styles.avatarText}>
-                          {entry.name
-                            .split(" ")
-                            .map((word) => word[0])
-                            .slice(0, 2)
-                            .join("")}
-                        </Text>
-                      </View>
-                      <View style={styles.cardCopy}>
-                        <Text style={styles.cardTitle}>{entry.name}</Text>
-                        <Text style={styles.body}>{entry.area}</Text>
-                        <Text style={styles.body}>
-                          {entry.interests.join(" · ")}
-                        </Text>
-                      </View>
-                      <Text style={styles.chevron} accessible={false}>
-                        ›
-                      </Text>
-                    </Pressable>
-                  ))}
-                  {!matches.length && (
-                    <Text style={styles.body}>
-                      Try another name or interest.
-                    </Text>
-                  )}
-                </>
+                <PeopleDirectory
+                  key={uid}
+                  uid={uid}
+                  loadingAccount={loading}
+                  query={query}
+                  onSelect={setPerson}
+                  unavailable={unavailable}
+                />
               )}
             </>
           )}
@@ -597,35 +537,457 @@ export default function SearchScreen() {
         </SafeAreaView>
       </Modal>
 
-      <Modal
-        visible={person !== null}
-        animationType="slide"
-        onRequestClose={() => setPerson(null)}
-      >
-        <SafeAreaView edges={["top", "bottom"]} style={styles.container}>
-          <View style={styles.pickerHeader}>
+      {person && uid && (
+        <PublicPerson
+          key={`${uid}:${person}`}
+          uid={uid}
+          id={person}
+          onClose={closePerson}
+          onUnavailable={markUnavailable}
+        />
+      )}
+    </>
+  );
+}
+
+// These components stay in this file; Interests and Groups keep their own logic.
+function PeopleDirectory({
+  uid,
+  loadingAccount,
+  query,
+  onSelect,
+  unavailable,
+}: {
+  uid: string;
+  loadingAccount: boolean;
+  query: string;
+  onSelect: (id: string) => void;
+  unavailable: string[];
+}) {
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+  const search = normalize(query).replace(/\s+/g, " ");
+  const [page, setPage] = useState<PeoplePage & { search: string }>({
+    people: [],
+    nextCursor: null,
+    search: "",
+  });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [refresh, setRefresh] = useState(0);
+  const generation = useRef(0);
+  const inFlight = useRef(false);
+  const visible =
+    page.search === search
+      ? {
+          ...page,
+          people: page.people.filter(
+            (entry) => !unavailable.includes(entry.id),
+          ),
+        }
+      : { people: [], nextCursor: null };
+
+  const load = useCallback(
+    async (cursor: string | null, ticket: number) => {
+      if (inFlight.current || !uid) return;
+      inFlight.current = true;
+      setBusy(true);
+      setError("");
+      try {
+        const path = `/api/public-people?q=${encodeURIComponent(search)}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
+        const result = await apiRequest<PeoplePage>(
+          accountFor(uid),
+          "GET",
+          undefined,
+          path,
+        );
+        if (generation.current !== ticket) return;
+        setPage((old) => ({
+          search,
+          nextCursor: result.nextCursor,
+          people: cursor
+            ? [
+                ...new Map(
+                  [...old.people, ...result.people].map((entry) => [
+                    entry.id,
+                    entry,
+                  ]),
+                ).values(),
+              ]
+            : result.people,
+        }));
+      } catch (cause) {
+        if (generation.current === ticket) setError(errorMessage(cause));
+      } finally {
+        if (generation.current === ticket) {
+          inFlight.current = false;
+          setBusy(false);
+        }
+      }
+    },
+    [uid, search],
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      const ticket = ++generation.current;
+      inFlight.current = false;
+      setPage({ people: [], nextCursor: null, search });
+      setError("");
+      setBusy(!!uid && !loadingAccount);
+      // One request after typing pauses; paging requires an explicit tap.
+      const timer =
+        uid && !loadingAccount
+          ? setTimeout(() => void load(null, ticket), 400)
+          : null;
+      return () => {
+        if (timer) clearTimeout(timer);
+        generation.current++;
+      };
+    }, [uid, loadingAccount, search, refresh, load]),
+  );
+
+  if (loadingAccount)
+    return (
+      <ActivityIndicator
+        accessibilityLabel="Loading account"
+        color={colors.accent}
+      />
+    );
+  if (!uid)
+    return (
+      <>
+        <Text style={styles.body}>
+          Sign in to find people who have made their profiles public.
+        </Text>
+        <Pressable
+          accessibilityRole="button"
+          style={styles.primaryButton}
+          onPress={() => router.push("/(tabs)/profile")}
+        >
+          <Text style={styles.primaryText}>Sign in</Text>
+        </Pressable>
+      </>
+    );
+  return (
+    <>
+      <View style={styles.peopleHeading}>
+        <Text
+          style={[styles.body, { flex: 1 }]}
+          accessibilityLiveRegion="polite"
+        >
+          {visible.people.length}{" "}
+          {visible.people.length === 1 ? "person" : "people"} shown
+        </Text>
+        <Pressable
+          accessibilityRole="button"
+          disabled={busy}
+          style={styles.textButton}
+          onPress={() => setRefresh((n) => n + 1)}
+        >
+          <Text style={styles.linkText}>Refresh</Text>
+        </Pressable>
+      </View>
+      {visible.people.map((entry) => (
+        <Pressable
+          key={entry.id}
+          accessibilityRole="button"
+          accessibilityLabel={`View ${entry.fullName}'s profile`}
+          onPress={() => {
+            Keyboard.dismiss();
+            onSelect(entry.id);
+          }}
+          style={({ pressed }) => [styles.category, pressed && styles.pressed]}
+        >
+          <View style={styles.iconBox}>
+            <Text style={styles.avatarText}>{initials(entry.fullName)}</Text>
+          </View>
+          <View style={styles.cardCopy}>
+            <Text style={styles.cardTitle}>{entry.fullName}</Text>
+            {!!entry.area && <Text style={styles.body}>{entry.area}</Text>}
+            {!!entry.interests.length && (
+              <Text numberOfLines={2} style={styles.body}>
+                {entry.interests.join(" · ")}
+              </Text>
+            )}
+          </View>
+          <Text style={styles.chevron} accessible={false}>
+            ›
+          </Text>
+        </Pressable>
+      ))}
+      {busy && (
+        <ActivityIndicator
+          accessibilityLabel="Loading people"
+          color={colors.accent}
+        />
+      )}
+      {!!error && (
+        <>
+          <Text accessibilityRole="alert" style={styles.body}>
+            {error}
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            style={styles.textButton}
+            onPress={() => void load(visible.nextCursor, generation.current)}
+          >
+            <Text style={styles.linkText}>Try again</Text>
+          </Pressable>
+        </>
+      )}
+      {!busy && !error && !visible.people.length && (
+        <Text style={styles.body}>
+          {visible.nextCursor
+            ? "No matches in this batch. Try another name or interest, or load more people."
+            : search
+              ? "No public profiles match this search."
+              : "No public profiles to show yet."}
+        </Text>
+      )}
+      {!error && !!visible.nextCursor && (
+        <Pressable
+          accessibilityRole="button"
+          disabled={busy}
+          accessibilityState={{ disabled: busy }}
+          style={[styles.primaryButton, busy && styles.disabled]}
+          onPress={() => void load(visible.nextCursor, generation.current)}
+        >
+          <Text style={styles.primaryText}>Load more people</Text>
+        </Pressable>
+      )}
+    </>
+  );
+}
+
+function PublicPerson({
+  uid,
+  id,
+  onClose,
+  onUnavailable,
+}: {
+  uid: string;
+  id: string;
+  onClose: () => void;
+  onUnavailable: (id: string) => void;
+}) {
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+  const [profile, setProfile] = useState<PublicProfile | null>(null);
+  const [photo, setPhoto] = useState<string | null>(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(true);
+  const [opening, setOpening] = useState(false);
+  const [retry, setRetry] = useState(0);
+  const generation = useRef(0);
+  const messageLock = useRef(false);
+  useFocusEffect(
+    useCallback(() => {
+      const ticket = ++generation.current;
+      setProfile(null);
+      setPhoto(null);
+      setError("");
+      setBusy(true);
+      void (async () => {
+        try {
+          const account = accountFor(uid);
+          const result = await apiRequest<{ profile: PublicProfile }>(
+            account,
+            "GET",
+            undefined,
+            `/api/profiles/${encodeURIComponent(id)}`,
+          );
+          if (generation.current !== ticket) return;
+          if (result.profile.profileVisibility !== "public")
+            throw new ApiError("Profile is no longer available.", 404);
+          setProfile(result.profile);
+          setBusy(false);
+          if (result.profile.photoVersion) {
+            try {
+              const image = await apiRequest<{ jpeg: string }>(
+                account,
+                "GET",
+                undefined,
+                `/api/profiles/${encodeURIComponent(id)}/photo?version=${encodeURIComponent(result.profile.photoVersion)}`,
+              );
+              if (generation.current === ticket)
+                setPhoto(`data:image/jpeg;base64,${image.jpeg}`);
+            } catch (cause) {
+              if (
+                generation.current === ticket &&
+                cause instanceof ApiError &&
+                cause.status === 404
+              ) {
+                // A visibility change must also hide the already opened details.
+                onUnavailable(id);
+                setProfile(null);
+                setError("Profile is no longer available.");
+              }
+            }
+          }
+        } catch (cause) {
+          if (
+            generation.current === ticket &&
+            cause instanceof ApiError &&
+            cause.status === 404
+          )
+            onUnavailable(id);
+          if (generation.current === ticket)
+            setError(
+              cause instanceof ApiError && cause.status === 404
+                ? "Profile is no longer available."
+                : errorMessage(cause),
+            );
+        } finally {
+          if (generation.current === ticket) setBusy(false);
+        }
+      })();
+      return () => {
+        generation.current++;
+      };
+    }, [uid, id, retry, onUnavailable]),
+  );
+
+  async function message() {
+    if (messageLock.current || !profile) return;
+    const ticket = generation.current;
+    messageLock.current = true;
+    setOpening(true);
+    setError("");
+    try {
+      const account = accountFor(uid);
+      const check = await apiRequest<{ profile: PublicProfile }>(
+        account,
+        "GET",
+        undefined,
+        `/api/profiles/${encodeURIComponent(id)}`,
+      );
+      if (generation.current !== ticket) return;
+      if (check.profile.profileVisibility !== "public")
+        throw new ApiError("Profile is no longer available.", 404);
+      const result = await apiRequest<{ conversation: { id: string } }>(
+        account,
+        "POST",
+        { peerId: id },
+        "/api/conversations",
+      );
+      if (generation.current !== ticket) return;
+      onClose();
+      router.push({
+        pathname: "/conversation/[id]",
+        params: { id: result.conversation.id },
+      });
+    } catch (cause) {
+      if (generation.current === ticket) {
+        const unavailable = cause instanceof ApiError && cause.status === 404;
+        if (unavailable) {
+          onUnavailable(id);
+          setProfile(null);
+          setPhoto(null);
+        }
+        setError(
+          unavailable ? "Profile is no longer available." : errorMessage(cause),
+        );
+      }
+    } finally {
+      messageLock.current = false;
+      if (generation.current === ticket) setOpening(false);
+    }
+  }
+  return (
+    <Modal visible animationType="slide" onRequestClose={onClose}>
+      <SafeAreaView edges={["top", "bottom"]} style={styles.container}>
+        <View style={styles.pickerHeader}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Close person details"
+            onPress={onClose}
+            style={styles.textButton}
+          >
+            <Text style={styles.linkText}>‹ Back to people</Text>
+          </Pressable>
+        </View>
+        <ScrollView contentContainerStyle={styles.content}>
+          {busy && (
+            <ActivityIndicator
+              accessibilityLabel="Loading profile"
+              color={colors.accent}
+            />
+          )}
+          {!!error && (
+            <Text accessibilityRole="alert" style={styles.body}>
+              {error}
+            </Text>
+          )}
+          {!busy && !profile && (
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Close person details"
-              onPress={() => setPerson(null)}
               style={styles.textButton}
+              onPress={() => setRetry((n) => n + 1)}
             >
-              <Text style={styles.linkText}>‹ Back to people</Text>
+              <Text style={styles.linkText}>Try again</Text>
             </Pressable>
-          </View>
-          <ScrollView contentContainerStyle={styles.content}>
-            <Text accessibilityRole="header" style={styles.title}>
-              {person?.name}
-            </Text>
-            <Text style={styles.body}>Sample profile · {person?.area}</Text>
-            <Text style={styles.body}>{person?.description}</Text>
-            <Text style={styles.body}>Languages: {person?.info}</Text>
-            <Text style={styles.sectionTitle}>Interests</Text>
-            <Text style={styles.body}>{person?.interests.join(" · ")}</Text>
-          </ScrollView>
-        </SafeAreaView>
-      </Modal>
-    </>
+          )}
+          {profile && (
+            <>
+              {photo ? (
+                <Image
+                  source={{ uri: photo }}
+                  accessibilityLabel={`${profile.fullName}'s profile photo`}
+                  style={styles.profilePhoto}
+                  onError={() => setPhoto(null)}
+                />
+              ) : (
+                <View style={styles.profileInitials}>
+                  <Text style={[styles.avatarText, { fontSize: 30 }]}>
+                    {initials(profile.fullName)}
+                  </Text>
+                </View>
+              )}
+              <Text accessibilityRole="header" style={styles.title}>
+                {profile.fullName}
+              </Text>
+              {!!profile.area && (
+                <Text style={styles.body}>{profile.area}</Text>
+              )}
+              {profile.age !== null && (
+                <Text style={styles.body}>Age {profile.age}</Text>
+              )}
+              {!!profile.aboutMe && (
+                <>
+                  <Text style={styles.sectionTitle}>About me</Text>
+                  <Text style={styles.body}>{profile.aboutMe}</Text>
+                </>
+              )}
+              {!!profile.interests.length && (
+                <>
+                  <Text style={styles.sectionTitle}>Interests</Text>
+                  <View style={styles.tags}>
+                    {profile.interests.map((interest) => (
+                      <View key={interest} style={styles.tag}>
+                        <Text style={styles.tagText}>{interest}</Text>
+                      </View>
+                    ))}
+                  </View>
+                </>
+              )}
+              <Pressable
+                accessibilityRole="button"
+                disabled={opening}
+                accessibilityState={{ disabled: opening, busy: opening }}
+                style={[styles.primaryButton, opening && styles.disabled]}
+                onPress={() => void message()}
+              >
+                {opening && <ActivityIndicator color={colors.background} />}
+                <Text style={styles.primaryText}>
+                  {opening ? "Opening…" : "Message"}
+                </Text>
+              </Pressable>
+            </>
+          )}
+        </ScrollView>
+      </SafeAreaView>
+    </Modal>
   );
 }
 
@@ -807,5 +1169,15 @@ function createStyles(colors: AppColors) {
       fontSize: 17,
     },
     avatarText: { color: colors.accent, fontSize: 18, fontWeight: "700" },
+    peopleHeading: { flexDirection: "row", alignItems: "center", gap: 12 },
+    profilePhoto: { width: 104, height: 104, borderRadius: 52 },
+    profileInitials: {
+      width: 104,
+      height: 104,
+      borderRadius: 52,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: colors.surface,
+    },
   });
 }

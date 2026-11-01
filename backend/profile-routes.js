@@ -7,6 +7,20 @@ const validId = (value) =>
 const fail = (message, status = 400) =>
   Object.assign(new Error(message), { status });
 
+const normalizeSearch = (text) =>
+  text
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, " ");
+const safeInterests = (data) =>
+  Array.isArray(data.interests)
+    ? data.interests
+        .filter((value) => typeof value === "string" && value.length <= 80)
+        .slice(0, 150)
+    : [];
+
 function profileExtras(data = {}) {
   return {
     aboutMe:
@@ -144,6 +158,109 @@ function installProfileRoutes(app, db, { toOwner, now = Date.now } = {}) {
         : next(error);
     }
   };
+  const searches = new Map();
+  let searchTotal = { at: now(), count: 0 };
+  app.get(
+    "/api/public-people",
+    handle(async (req, res) => {
+      if (
+        (req.query.q !== undefined && typeof req.query.q !== "string") ||
+        (req.query.q?.length || 0) > 100
+      )
+        throw fail("Use a search of 100 characters or fewer.");
+      const queryText = normalizeSearch(req.query.q || "");
+      const key = createHash("sha256")
+        .update(JSON.stringify([req.account.uid, queryText]))
+        .digest("hex")
+        .slice(0, 24);
+      let after = "";
+      if (req.query.cursor !== undefined) {
+        let cursor;
+        try {
+          if (
+            typeof req.query.cursor !== "string" ||
+            req.query.cursor.length > 800 ||
+            !/^[A-Za-z0-9_-]+$/.test(req.query.cursor)
+          )
+            throw Error();
+          cursor = JSON.parse(
+            Buffer.from(req.query.cursor, "base64url").toString("utf8"),
+          );
+          if (
+            !validId(cursor.last) ||
+            cursor.key !== key ||
+            !Number.isFinite(cursor.at) ||
+            cursor.at > now() + 5000 ||
+            now() - cursor.at > 600000
+          )
+            throw Error();
+        } catch {
+          throw fail("This people search changed. Tap Refresh to start again.");
+        }
+        after = cursor.last;
+      }
+      for (const [id, entry] of searches)
+        if (now() - entry.at >= 60000) searches.delete(id);
+      if (now() - searchTotal.at >= 60000)
+        searchTotal = { at: now(), count: 0 };
+      const allowance = searches.get(req.account.uid) || {
+        at: now(),
+        count: 0,
+      };
+      if (
+        allowance.count >= 30 ||
+        searchTotal.count >= 120 ||
+        (searches.size >= 1000 && !searches.has(req.account.uid))
+      )
+        throw fail("Please wait a moment before searching again.", 429);
+      allowance.count++;
+      searchTotal.count++;
+      searches.set(req.account.uid, allowance);
+      // Only public user metadata is queried. No private profiles or image bytes
+      // are scanned, and each explicit request performs one query of at most 25 docs.
+      let query = db
+        .collection("users")
+        .where("profileVisibility", "==", "public")
+        .orderBy("__name__")
+        .select("fullName", "area", "interests", "profileVisibility")
+        .limit(25);
+      if (after) query = query.startAfter(after);
+      const found = await query.get();
+      const words = queryText.split(" ").filter(Boolean);
+      const people = [];
+      for (const doc of found.docs) {
+        const data = doc.data();
+        if (
+          doc.id === req.account.uid ||
+          data.profileVisibility !== "public" ||
+          typeof data.fullName !== "string"
+        )
+          continue;
+        const interests = safeInterests(data);
+        const text = normalizeSearch(
+          [
+            data.fullName,
+            typeof data.area === "string" ? data.area : "",
+            ...interests,
+          ].join(" "),
+        );
+        if (!words.every((word) => text.includes(word))) continue;
+        people.push({
+          id: doc.id,
+          fullName: data.fullName,
+          area: typeof data.area === "string" ? data.area : "",
+          interests,
+        });
+      }
+      const nextCursor =
+        found.docs.length === 25
+          ? Buffer.from(
+              JSON.stringify({ key, last: found.docs.at(-1).id, at: now() }),
+            ).toString("base64url")
+          : null;
+      res.json({ people, nextCursor });
+    }),
+  );
   app.get(
     "/api/profiles/:uid",
     handle(async (req, res) => {
@@ -158,6 +275,7 @@ function installProfileRoutes(app, db, { toOwner, now = Date.now } = {}) {
           age: owner.age,
           profileVisibility: owner.profileVisibility,
           photoVersion: owner.photoVersion,
+          interests: safeInterests(data),
         },
       });
     }),
