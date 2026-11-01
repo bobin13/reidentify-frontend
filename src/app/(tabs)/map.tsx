@@ -80,26 +80,33 @@ export default function MapScreen() {
   const savedDistrictId = profileSelection?.districtId || "";
   const profileKey = [user?.id || "", savedCityId, savedDistrictId].join("|");
   const lastCenteredProfile = useRef(profileKey);
+  const scroll = useRef<ScrollView>(null);
   const initial = areaFor(profileSelection);
   const profileLatitude = initial.coordinate.latitude;
   const profileLongitude = initial.coordinate.longitude;
   const pendingFocus = groupMapState.pendingFocus;
+  const hasEventFocus = pendingFocus?.uid === user?.id && !!user?.id;
   const startingCoordinate =
-    pendingFocus && pendingFocus.uid === user?.id
+    hasEventFocus && pendingFocus
       ? pendingFocus.coordinate
       : initial.coordinate;
+  const startingRadiusKm = hasEventFocus ? 0.5 : 10;
   const [center, setCenter] = useState<Coordinates>(startingCoordinate);
   const [recenterKey, setRecenterKey] = useState(0);
-  const radiusKm = 10; // Initial camera zoom only; event searches follow the viewport.
-  const [zoomRequest, setZoomRequest] = useState({ radiusKm: 10, id: 0 });
+  // Camera zoom only; event searches continue to follow the visible viewport.
+  const [radiusKm, setRadiusKm] = useState(startingRadiusKm);
+  const [zoomRequest, setZoomRequest] = useState({
+    radiusKm: startingRadiusKm,
+    id: 0,
+  });
   const [view, setView] = useState(() => ({
     owner: profileKey,
-    region: initialMapRegion(startingCoordinate),
+    region: initialMapRegion(startingCoordinate, startingRadiusKm),
   }));
   const region =
     view.owner === profileKey
       ? view.region
-      : initialMapRegion(startingCoordinate);
+      : initialMapRegion(startingCoordinate, startingRadiusKm);
   const [useInterests, setUseInterests] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [locating, setLocating] = useState(false);
@@ -174,12 +181,21 @@ export default function MapScreen() {
   );
 
   const chooseCenter = useCallback(
-    (coordinate: Coordinates) => {
+    (coordinate: Coordinates, nextRadiusKm = 10) => {
       locationRequest.current++;
       setLocating(false);
       setCenter({ ...coordinate });
+      setRadiusKm(nextRadiusKm);
+      setZoomRequest((previous) => ({
+        radiusKm: nextRadiusKm,
+        id: previous.id + 1,
+      }));
       setRecenterKey((value) => value + 1);
-      setView({ owner: profileKey, region: initialMapRegion(coordinate) });
+      setView({
+        owner: profileKey,
+        region: initialMapRegion(coordinate, nextRadiusKm),
+      });
+      scroll.current?.scrollTo({ y: 0, animated: false });
       setSelectedId(null);
       setLocationIssue("");
       setShowSettings(false);
@@ -216,7 +232,8 @@ export default function MapScreen() {
       if (target?.uid === uid) {
         groupMapState.pendingFocus = null;
         lastCenteredProfile.current = profileKey;
-        chooseCenter(target.coordinate);
+        setUseInterests(false);
+        chooseCenter(target.coordinate, 0.5);
       } else if (changedProfile) {
         lastCenteredProfile.current = profileKey;
         chooseCenter({
@@ -277,7 +294,8 @@ export default function MapScreen() {
             uid,
             coordinate: { ...event.coordinate },
           };
-          chooseCenter(event.coordinate);
+          setUseInterests(false);
+          chooseCenter(event.coordinate, 0.5);
         }
       },
     );
@@ -546,6 +564,7 @@ export default function MapScreen() {
 
   return (
     <ScrollView
+      ref={scroll}
       style={styles.container}
       onLayout={({ nativeEvent }) =>
         setViewportHeight(nativeEvent.layout.height)

@@ -12,7 +12,11 @@ const { getFirestore } = require("firebase-admin/firestore");
 const { cities } = require("../shared/ontario-areas.json");
 const cityIndex = new Map(cities.map((city) => [city.id, city]));
 const { installPlaceRoutes } = require("./places-routes");
-
+const {
+  installProfileRoutes,
+  profileExtras,
+  profileChanges,
+} = require("./profile-routes");
 
 function resolveLocation(input) {
   if (!input || typeof input !== "object" || Array.isArray(input)) return null;
@@ -77,11 +81,30 @@ function locationArea(location) {
   return [location.district, location.city].filter(Boolean).join(", ");
 }
 
+function ownerProfile(account, data) {
+  const location = resolveLocation(data.location) || legacyLocation(data.area);
+  return {
+    id: account.uid,
+    email: account.email || "",
+    fullName: data.fullName,
+    area: location ? locationArea(location) : data.area || "",
+    location,
+    interests: data.interests || [],
+    joinedAt: data.joinedAt,
+    ...profileExtras(data),
+  };
+}
+
 function createApp({ db, firebaseAuth }) {
   const app = express();
 
   app.disable("x-powered-by");
-  app.use(express.json({ limit: "16kb" }));
+  const json = express.json({ limit: "16kb" });
+  app.use((req, res, next) => {
+    // Only this authenticated upload route accepts the larger photo body.
+    if (req.method === "POST" && req.path === "/api/me/photo") return next();
+    return json(req, res, next);
+  });
 
   app.get("/health", (_req, res) => {
     res.json({
@@ -142,19 +165,8 @@ function createApp({ db, firebaseAuth }) {
     }
 
     const data = snapshot.data();
-    const location =
-      resolveLocation(data.location) || legacyLocation(data.area);
-
     res.json({
-      user: {
-        id: req.account.uid,
-        email: req.account.email || "",
-        fullName: data.fullName,
-        area: location ? locationArea(location) : data.area || "",
-        location,
-        interests: data.interests || [],
-        joinedAt: data.joinedAt,
-      },
+      user: ownerProfile(req.account, data),
     });
   });
 
@@ -169,6 +181,12 @@ function createApp({ db, firebaseAuth }) {
     }
 
     const { fullName, area, interests } = input;
+
+    try {
+      profileChanges(input);
+    } catch (error) {
+      return res.status(400).json({ message: error.message });
+    }
 
     if (
       typeof fullName !== "string" ||
@@ -228,18 +246,20 @@ function createApp({ db, firebaseAuth }) {
         location,
         interests: [...new Set(selectedInterests.map((item) => item.trim()))],
         joinedAt: previous.joinedAt || new Date().toISOString(),
+        ...profileChanges(input, previous),
       };
 
       transaction.set(reference, profile, {
         merge: true,
       });
 
-      return profile;
+      return ownerProfile(req.account, { ...previous, ...profile });
     });
 
     res.json({ user });
   });
 
+  installProfileRoutes(app, db, { toOwner: ownerProfile });
   installPlaceRoutes(app);
   installNewsRoutes(app);
   installGroupRoutes(app, db);
@@ -252,54 +272,47 @@ function createApp({ db, firebaseAuth }) {
     });
   });
 
-app.use((error, req, res, _next) => {
-  if (error.type === "entity.parse.failed") {
-    return res.status(400).json({
-      message: "Send valid JSON.",
+  app.use((error, req, res, _next) => {
+    if (error.type === "entity.parse.failed") {
+      return res.status(400).json({
+        message: "Send valid JSON.",
+      });
+    }
+
+    if (error.type === "entity.too.large") {
+      return res.status(413).json({
+        message: "Request is too large.",
+      });
+    }
+
+    console.error(
+      "Request failed:",
+      JSON.stringify({
+        method: req.method,
+        path: req.path,
+        code: error.code ?? null,
+        message: String(error.message || "Unknown error").slice(0, 1200),
+        ...(typeof error.details === "string"
+          ? { details: error.details.slice(0, 1200) }
+          : {}),
+      }),
+    );
+
+    if (
+      [8, "8", "resource-exhausted", "RESOURCE_EXHAUSTED"].includes(error.code)
+    ) {
+      res.set("Retry-After", "60");
+
+      return res.status(503).json({
+        message:
+          "ReIdentify has reached a service limit. Please try again later.",
+      });
+    }
+
+    res.status(500).json({
+      message: "Something went wrong. Try again.",
     });
-  }
-
-  if (error.type === "entity.too.large") {
-    return res.status(413).json({
-      message: "Request is too large.",
-    });
-  }
-
-  console.error(
-    "Request failed:",
-    JSON.stringify({
-      method: req.method,
-      path: req.path,
-      code: error.code ?? null,
-      message: String(
-        error.message || "Unknown error",
-      ).slice(0, 1200),
-      ...(typeof error.details === "string"
-        ? { details: error.details.slice(0, 1200) }
-        : {}),
-    }),
-  );
-
-  if (
-    [
-      8,
-      "8",
-      "resource-exhausted",
-      "RESOURCE_EXHAUSTED",
-    ].includes(error.code)
-  ) {
-    res.set("Retry-After", "60");
-
-    return res.status(503).json({
-      message:
-        "ReIdentify has reached a service limit. Please try again later.",
-    });
-  }
-
-  res.status(500).json({
-    message: "Something went wrong. Try again.",
   });
-});
 
   return app;
 }
@@ -339,8 +352,8 @@ async function start() {
 
   const stopGroupCleanup = startGroupCleanup(db);
   server.on("close", stopGroupCleanup);
-    const stopExternalEvents = startExternalEventSync(db);
-    server.on("close", stopExternalEvents);
+  const stopExternalEvents = startExternalEventSync(db);
+  server.on("close", stopExternalEvents);
 
   server.on("error", (error) => {
     console.error("Server could not listen:", error.message);

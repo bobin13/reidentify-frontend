@@ -19,10 +19,14 @@ export async function apiRequest<T>(
   method: "GET" | "PUT" | "POST",
   body?: unknown,
   path = "/api/me",
+  options: { timeoutMs?: number } = {},
 ): Promise<T> {
   const token = await account.getIdToken();
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 10000);
+  const timeout = setTimeout(
+    () => controller.abort(),
+    Math.max(1000, Math.min(45000, options.timeoutMs ?? 10000)),
+  );
 
   try {
     const response = await fetch(`${API_URL}${path}`, {

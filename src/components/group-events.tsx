@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useFocusEffect } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import {
   ActivityIndicator,
   Alert,
@@ -15,7 +15,6 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import VenueMap from "./venue-map";
 type Coordinates = { latitude: number; longitude: number };
 type VenueSuggestion = {
   id: string;
@@ -25,7 +24,6 @@ type VenueSuggestion = {
   coordinate: Coordinates;
 };
 import { useAuth } from "../context/auth-context";
-import { useAppTheme } from "../context/theme-context";
 import {
   dateLabel,
   groupError,
@@ -140,12 +138,24 @@ export function GroupEvents({
             <Text style={s.muted}>{event.description}</Text>
           )}
           <GroupButton
-            label="Open venue in Maps"
+            label="Show on map"
             secondary
             onPress={() => {
-              void Linking.openURL(
-                `https://www.google.com/maps/search/?api=1&query=${event.latitude},${event.longitude}`,
-              ).catch(() => setError("Could not open Maps."));
+              if (
+                !Number.isFinite(event.latitude) ||
+                !Number.isFinite(event.longitude)
+              ) {
+                setError("This event does not have a valid meeting location.");
+                return;
+              }
+              groupMapState.pendingFocus = {
+                uid,
+                coordinate: {
+                  latitude: event.latitude,
+                  longitude: event.longitude,
+                },
+              };
+              router.navigate("/(tabs)/map");
             }}
           />
           {event.creatorId === uid && (
@@ -212,8 +222,7 @@ function EventForm({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const { s, colors } = useGroupStyles(),
-    { theme } = useAppTheme();
+  const { s, colors } = useGroupStyles();
   const { user } = useAuth();
   const savedCenter = user?.location?.coordinate;
   const tomorrow = new Date(Date.now() + 86400000);
@@ -575,22 +584,6 @@ function EventForm({
                   setError("");
                 }}
               />
-              <View style={formStyles.mapSection}>
-                <View style={formStyles.map}>
-                  <VenueMap
-                    center={mapCenter}
-                    pin={coordinate}
-                    theme={theme}
-                    onPick={(point) => {
-                      setCoordinate(point);
-                      setConfirmed(false);
-                    }}
-                  />
-                </View>
-                <Text style={s.muted}>
-                  Tap the map to choose the meeting point.
-                </Text>
-              </View>
               <Pressable
                 accessibilityRole="checkbox"
                 accessibilityState={{
@@ -909,7 +902,5 @@ const formStyles = StyleSheet.create({
   publicCheck: { minHeight: 44, paddingVertical: 4, justifyContent: "center" },
   publicCheckText: { fontSize: 14, lineHeight: 20 },
   descriptionInput: { minHeight: 160, paddingTop: 12 },
-  mapSection: { gap: 8 },
-  map: { height: 260, borderRadius: 16, overflow: "hidden" },
   pressed: { opacity: 0.72 },
 });

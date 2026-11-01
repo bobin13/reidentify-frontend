@@ -45,7 +45,15 @@ export type AppUser = {
   location?: ProfileLocation | null;
   interests: string[];
   joinedAt: string;
+  aboutMe?: string;
+  age?: number | null;
+  profileVisibility?: "public" | "private";
+  photoVersion?: string | null;
 };
+
+export type ProfilePhotoChange =
+  | { kind: "upload"; jpeg: string; requestId: string }
+  | { kind: "remove" };
 
 // Keep existing imports compatible.
 // These values do not create or authenticate a demo account.
@@ -60,6 +68,9 @@ type AuthResult = { ok: true } | { ok: false; message: string };
 
 type ProfileInput = Pick<AppUser, "fullName" | "area" | "interests"> & {
   location?: AreaSelection;
+  aboutMe?: string;
+  age?: number | null;
+  profileVisibility?: "public" | "private";
 };
 
 type RegistrationFields = AuthFields & { location?: AreaSelection | null };
@@ -76,6 +87,7 @@ type AuthContextValue = {
   register: (fields: RegistrationFields) => Promise<AuthResult>;
   signOut: () => Promise<AuthResult>;
   updateProfile: (input: ProfileInput) => Promise<AuthResult>;
+  changeProfilePhoto: (change: ProfilePhotoChange) => Promise<AuthResult>;
   refreshProfile: () => Promise<AuthResult>;
 };
 
@@ -351,10 +363,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   async function updateProfile(input: ProfileInput): Promise<AuthResult> {
+    const account = auth.currentUser;
     return runAction(async () => {
-      const account = auth.currentUser;
-
-      if (!account) {
+      if (!account || auth.currentUser?.uid !== account.uid) {
         throw new Error("Please sign in to edit your profile.");
       }
 
@@ -369,6 +380,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
   }
 
+  async function changeProfilePhoto(
+    change: ProfilePhotoChange,
+  ): Promise<AuthResult> {
+    const account = auth.currentUser;
+    return runAction(async () => {
+      if (!account || auth.currentUser?.uid !== account.uid) {
+        throw new Error("Please sign in again before changing your photo.");
+      }
+      const result = await apiRequest<{ user: AppUser }>(
+        account,
+        "POST",
+        change.kind === "remove"
+          ? {}
+          : { jpeg: change.jpeg, requestId: change.requestId },
+        change.kind === "remove" ? "/api/me/photo/remove" : "/api/me/photo",
+        { timeoutMs: 40000 },
+      );
+      return result.user;
+    });
+  }
+
   return (
     <AuthContext.Provider
       value={{
@@ -379,6 +411,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         register,
         signOut,
         updateProfile,
+        changeProfilePhoto,
         refreshProfile,
       }}
     >
