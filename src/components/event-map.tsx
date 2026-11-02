@@ -28,6 +28,8 @@ export type EventMapProps = {
   center: Coordinates;
   radiusKm: number;
   zoomRequest?: { radiusKm: number; id: number };
+  focusRequest?: { id: number; coordinate: Coordinates } | null;
+  compact?: boolean;
   events: MapPoint[];
   recenterKey?: number;
   selectedId: string | null;
@@ -77,6 +79,8 @@ function EventMap({
   recenterKey = 0,
   radiusKm,
   zoomRequest,
+  focusRequest,
+  compact = false,
   events,
   selectedId,
   theme,
@@ -108,6 +112,7 @@ function EventMap({
   const ready = readyKey === nativeKey;
   const [mapType, setMapType] = useState<MapType>("standard");
   const [traffic, setTraffic] = useState(false);
+  const [showTools, setShowTools] = useState(false);
   const [routeError, setRouteError] = useState("");
   const lastZoomRequest = useRef(0);
   const selected = events.find((event) => event.id === selectedId);
@@ -140,6 +145,18 @@ function EventMap({
     },
     [onMove],
   );
+
+  useEffect(() => {
+    if (!ready || !focusRequest) return;
+    // Let the details panel finish changing the canvas size, then centre the
+    // selected venue in the visible map. No MapView key or marker tracking changes.
+    const timer = setTimeout(() => {
+      const next = { ...visibleRegion.current, ...focusRequest.coordinate };
+      commitRegion(next);
+      map.current?.animateToRegion(next, 300);
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [ready, focusRequest, mapSize.width, mapSize.height, commitRegion]);
 
   useEffect(() => {
     if (!ready || !zoomRequest || zoomRequest.id === lastZoomRequest.current)
@@ -209,61 +226,63 @@ function EventMap({
 
   return (
     <View style={styles.container}>
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.toolbar}
-        contentContainerStyle={styles.tools}
-      >
-        {(
-          [
-            { value: "standard", label: "Street" },
-            { value: "hybrid", label: "Satellite" },
-            ...(Platform.OS === "android"
-              ? [{ value: "terrain", label: "Terrain" }]
-              : []),
-          ] as { value: MapType; label: string }[]
-        ).map((item) => (
-          <Pressable
-            key={item.value}
-            accessibilityRole="button"
-            accessibilityLabel={`${item.label} map`}
-            accessibilityState={{ selected: mapType === item.value }}
-            style={[styles.tool, mapType === item.value && styles.active]}
-            onPress={() => setMapType(item.value)}
-          >
-            <Text
-              style={[
-                styles.toolText,
-                mapType === item.value && styles.activeText,
-              ]}
+      {!compact && (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.toolbar}
+          contentContainerStyle={styles.tools}
+        >
+          {(
+            [
+              { value: "standard", label: "Street" },
+              { value: "hybrid", label: "Satellite" },
+              ...(Platform.OS === "android"
+                ? [{ value: "terrain", label: "Terrain" }]
+                : []),
+            ] as { value: MapType; label: string }[]
+          ).map((item) => (
+            <Pressable
+              key={item.value}
+              accessibilityRole="button"
+              accessibilityLabel={`${item.label} map`}
+              accessibilityState={{ selected: mapType === item.value }}
+              style={[styles.tool, mapType === item.value && styles.active]}
+              onPress={() => setMapType(item.value)}
             >
-              {item.label}
+              <Text
+                style={[
+                  styles.toolText,
+                  mapType === item.value && styles.activeText,
+                ]}
+              >
+                {item.label}
+              </Text>
+            </Pressable>
+          ))}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Traffic layer"
+            accessibilityState={{ selected: traffic }}
+            style={[styles.tool, traffic && styles.active]}
+            onPress={() => setTraffic(!traffic)}
+          >
+            <Text style={[styles.toolText, traffic && styles.activeText]}>
+              Traffic
             </Text>
           </Pressable>
-        ))}
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Traffic layer"
-          accessibilityState={{ selected: traffic }}
-          style={[styles.tool, traffic && styles.active]}
-          onPress={() => setTraffic(!traffic)}
-        >
-          <Text style={[styles.toolText, traffic && styles.activeText]}>
-            Traffic
-          </Text>
-        </Pressable>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Fit event pins"
-          accessibilityState={{ disabled: !ready || !events.length }}
-          disabled={!ready || !events.length}
-          style={[styles.tool, (!ready || !events.length) && styles.disabled]}
-          onPress={fitEvents}
-        >
-          <Text style={styles.toolText}>Fit events</Text>
-        </Pressable>
-      </ScrollView>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Fit event pins"
+            accessibilityState={{ disabled: !ready || !events.length }}
+            disabled={!ready || !events.length}
+            style={[styles.tool, (!ready || !events.length) && styles.disabled]}
+            onPress={fitEvents}
+          >
+            <Text style={styles.toolText}>Fit events</Text>
+          </Pressable>
+        </ScrollView>
+      )}
       <View style={styles.canvas}>
         <MapView
           key={nativeKey}
@@ -334,7 +353,109 @@ function EventMap({
             ),
           )}
         </MapView>
-        <View style={styles.zoomTools}>
+        {compact && (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Map view options"
+            accessibilityState={{ expanded: showTools }}
+            style={styles.mapViewButton}
+            onPress={() => setShowTools((value) => !value)}
+          >
+            <Text style={styles.toolText}>Map view</Text>
+          </Pressable>
+        )}
+        {compact && showTools && (
+          <View
+            style={[
+              styles.mapMenu,
+              { maxHeight: Math.max(80, mapSize.height - 20) },
+            ]}
+          >
+            <ScrollView
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={styles.menuContent}
+            >
+              <Pressable
+                accessibilityRole="button"
+                style={styles.tool}
+                onPress={() => setShowTools(false)}
+              >
+                <Text style={styles.toolText}>Done</Text>
+              </Pressable>
+              {(
+                [
+                  { value: "standard", label: "Street" },
+                  { value: "hybrid", label: "Satellite" },
+                  ...(Platform.OS === "android"
+                    ? [{ value: "terrain", label: "Terrain" }]
+                    : []),
+                ] as { value: MapType; label: string }[]
+              ).map((item) => (
+                <Pressable
+                  key={item.value}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${item.label} map`}
+                  accessibilityState={{ selected: mapType === item.value }}
+                  style={[styles.tool, mapType === item.value && styles.active]}
+                  onPress={() => {
+                    setMapType(item.value);
+                    setShowTools(false);
+                  }}
+                >
+                  <Text
+                    style={[
+                      styles.toolText,
+                      mapType === item.value && styles.activeText,
+                    ]}
+                  >
+                    {item.label}
+                  </Text>
+                </Pressable>
+              ))}
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Traffic layer"
+                accessibilityState={{ selected: traffic }}
+                style={[styles.tool, traffic && styles.active]}
+                onPress={() => setTraffic((value) => !value)}
+              >
+                <Text style={[styles.toolText, traffic && styles.activeText]}>
+                  Traffic
+                </Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Fit event pins"
+                disabled={!ready || !events.length}
+                style={[
+                  styles.tool,
+                  (!ready || !events.length) && styles.disabled,
+                ]}
+                onPress={() => {
+                  fitEvents();
+                  setShowTools(false);
+                }}
+              >
+                <Text style={styles.toolText}>Fit events</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Return to search location"
+                disabled={!ready}
+                style={styles.tool}
+                onPress={() => {
+                  recenter();
+                  setShowTools(false);
+                }}
+              >
+                <Text style={styles.toolText}>Centre</Text>
+              </Pressable>
+            </ScrollView>
+          </View>
+        )}
+        <View
+          style={[styles.zoomTools, compact ? { bottom: 40 } : { top: 10 }]}
+        >
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Zoom in"
@@ -353,48 +474,51 @@ function EventMap({
           >
             <Text style={styles.zoomText}>−</Text>
           </Pressable>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Return to search location"
-            disabled={!ready}
-            style={styles.square}
-            onPress={recenter}
-          >
-            <Text style={styles.centerText}>Centre</Text>
-          </Pressable>
-        </View>
-      </View>
-      {selected ? (
-        <View style={styles.selection}>
-          <View style={styles.selectionRow}>
-            <View style={styles.selectionDetails}>
-              <Text numberOfLines={1} style={styles.eventTitle}>
-                {selected.title}
-              </Text>
-              <Text numberOfLines={1} style={styles.place}>
-                {selected.location}
-              </Text>
-            </View>
+          {!compact && (
             <Pressable
-              accessibilityRole="link"
-              accessibilityLabel={`Open ${selected.title} in Google Maps`}
-              style={styles.mapsLink}
-              onPress={() => void openGoogleMaps()}
+              accessibilityRole="button"
+              accessibilityLabel="Return to search location"
+              disabled={!ready}
+              style={styles.square}
+              onPress={recenter}
             >
-              <Text style={styles.mapsLinkText}>Open in Google Maps ↗</Text>
+              <Text style={styles.centerText}>Centre</Text>
             </Pressable>
-          </View>
-          {!!routeError && (
-            <Text accessibilityRole="alert" style={styles.place}>
-              {routeError}
-            </Text>
           )}
         </View>
-      ) : (
-        <Text style={styles.hint}>
-          Tap a pin for details. Tap a number to see its places.
-        </Text>
-      )}
+      </View>
+      {!compact &&
+        (selected ? (
+          <View style={styles.selection}>
+            <View style={styles.selectionRow}>
+              <View style={styles.selectionDetails}>
+                <Text numberOfLines={1} style={styles.eventTitle}>
+                  {selected.title}
+                </Text>
+                <Text numberOfLines={1} style={styles.place}>
+                  {selected.location}
+                </Text>
+              </View>
+              <Pressable
+                accessibilityRole="link"
+                accessibilityLabel={`Open ${selected.title} in Google Maps`}
+                style={styles.mapsLink}
+                onPress={() => void openGoogleMaps()}
+              >
+                <Text style={styles.mapsLinkText}>Open in Google Maps ↗</Text>
+              </Pressable>
+            </View>
+            {!!routeError && (
+              <Text accessibilityRole="alert" style={styles.place}>
+                {routeError}
+              </Text>
+            )}
+          </View>
+        ) : (
+          <Text style={styles.hint}>
+            Tap a pin for details. Tap a number to see its places.
+          </Text>
+        ))}
     </View>
   );
 }
@@ -440,8 +564,33 @@ function createStyles(colors: AppColors) {
     active: { backgroundColor: colors.accent, borderColor: colors.accent },
     activeText: { color: colors.background },
     disabled: { opacity: 0.5 },
-    canvas: { flex: 1, minHeight: 160 },
-    zoomTools: { position: "absolute", right: 10, top: 10, gap: 6 },
+    canvas: { flex: 1, minHeight: 0 },
+    zoomTools: { position: "absolute", right: 10, gap: 6 },
+    mapViewButton: {
+      position: "absolute",
+      top: 10,
+      right: 10,
+      minHeight: 44,
+      paddingHorizontal: 12,
+      justifyContent: "center",
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: 12,
+      elevation: 3,
+    },
+    mapMenu: {
+      position: "absolute",
+      top: 10,
+      left: 10,
+      right: 100,
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: 12,
+      elevation: 5,
+    },
+    menuContent: { padding: 8, gap: 6 },
     square: {
       width: 48,
       minHeight: 44,
