@@ -718,16 +718,19 @@ export default function MapScreen() {
             accessibilityLabel="Map zoom shortcuts"
             style={styles.distancePicker}
           >
-            {([0.5, 2, 10] as const).map((distance) => {
+            {([0.2, 0.5, 2] as const).map((distance) => {
               const expected = initialMapRegion(region, distance).latitudeDelta;
               const active =
                 Math.abs(region.latitudeDelta - expected) < expected * 0.08;
-              const label = distance === 0.5 ? "500m" : `${distance}km`;
+              const label =
+                distance < 1
+                  ? `${Math.round(distance * 1000)}m`
+                  : `${distance}km`;
               return (
                 <Pressable
                   key={distance}
                   accessibilityRole="radio"
-                  accessibilityLabel={`Zoom to about ${distance === 0.5 ? "500 m" : distance + " km"}`}
+                  accessibilityLabel={`Zoom to about ${distance < 1 ? Math.round(distance * 1000) + " m" : distance + " km"}`}
                   accessibilityState={{ checked: active }}
                   style={[styles.distanceOption, active && styles.activeChip]}
                   onPress={() =>

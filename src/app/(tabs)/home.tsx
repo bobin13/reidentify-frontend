@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { router, useFocusEffect } from "expo-router";
+import { useFocusEffect } from "expo-router";
 import { SymbolView } from "expo-symbols";
 import {
   ActivityIndicator,
@@ -49,30 +49,13 @@ async function openArticle(article: NewsArticle) {
     Alert.alert("Couldn't open article", "Please try again.");
   }
 }
-
-// Existing group previews are retained for this Home update.
-const nearbyGroups = [
-  {
-    id: "1",
-    title: "Riverside Walkers",
-    details: "42 members · 1.2 miles",
-    image: require("../../../assets/images/placeholder2.jpg"),
-  },
-  {
-    id: "2",
-    title: "Green Fingers Club",
-    details: "28 members · 0.8 miles",
-    image: require("../../../assets/images/placeholder3.jpg"),
-  },
-];
-
 function NewsPhoto({ uri }: { uri: string | null | undefined }) {
   const [failed, setFailed] = useState(false);
   if (!uri || failed) return null;
   return (
     <Image
       source={{ uri }}
-      style={{ width: "100%", aspectRatio: 16 / 9, borderRadius: 12 }}
+      style={{ width: "100%", aspectRatio: 16 / 9 }}
       resizeMode="cover"
       accessible={false}
       onError={() => setFailed(true)}
@@ -423,30 +406,32 @@ export default function HomeScreen() {
                   key={displayPhotos.get(article.id) || "no-photo"}
                   uri={displayPhotos.get(article.id)}
                 />
-                <View style={styles.newsMeta}>
-                  <Text style={styles.newsSource}>{article.source}</Text>
-                  <Text style={styles.newsArea}>{article.areaLabel}</Text>
+                <View style={styles.newsBody}>
+                  <View style={styles.newsMeta}>
+                    <Text style={styles.newsSource}>{article.source}</Text>
+                    <Text style={styles.newsArea}>{article.areaLabel}</Text>
+                  </View>
+                  <Text style={styles.newsTitle}>{article.title}</Text>
+                  {!!article.summary && (
+                    <Text style={styles.newsSummary}>{article.summary}</Text>
+                  )}
+                  <View style={styles.newsFooter}>
+                    <Text style={styles.newsDate}>
+                      {article.publishedAt === null
+                        ? "Date unavailable"
+                        : new Date(article.publishedAt).toLocaleDateString(
+                            "en-CA",
+                            { month: "short", day: "numeric", year: "numeric" },
+                          )}
+                    </Text>
+                    <Text style={styles.sectionLink}>Read article ↗</Text>
+                  </View>
+                  {article.stale && (
+                    <Text style={styles.newsDate}>
+                      Saved from an earlier refresh
+                    </Text>
+                  )}
                 </View>
-                <Text style={styles.newsTitle}>{article.title}</Text>
-                {!!article.summary && (
-                  <Text style={styles.newsSummary}>{article.summary}</Text>
-                )}
-                <View style={styles.newsFooter}>
-                  <Text style={styles.newsDate}>
-                    {article.publishedAt === null
-                      ? "Date unavailable"
-                      : new Date(article.publishedAt).toLocaleDateString(
-                          "en-CA",
-                          { month: "short", day: "numeric", year: "numeric" },
-                        )}
-                  </Text>
-                  <Text style={styles.sectionLink}>Read article ↗</Text>
-                </View>
-                {article.stale && (
-                  <Text style={styles.newsDate}>
-                    Saved from an earlier refresh
-                  </Text>
-                )}
               </Pressable>
             ))}
 
@@ -498,29 +483,6 @@ export default function HomeScreen() {
               · Articles from the past 30 days
             </Text>
           )}
-        </View>
-
-        {/* GROUPS NEAR YOU */}
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Groups near you</Text>
-
-          <Pressable onPress={() => router.push("/map")}>
-            <Text style={styles.sectionLink}>View map</Text>
-          </Pressable>
-        </View>
-
-        <View style={styles.groupsRow}>
-          {nearbyGroups.map((group) => (
-            <Pressable key={group.id} style={styles.groupCard}>
-              <Image source={group.image} style={styles.groupImage} />
-
-              <View style={styles.groupBody}>
-                <Text style={styles.groupTitle}>{group.title}</Text>
-
-                <Text style={styles.groupDetails}>{group.details}</Text>
-              </View>
-            </Pressable>
-          ))}
         </View>
 
         {/* COMMUNITY MESSAGE */}
@@ -662,12 +624,20 @@ function createStyles(colors: AppColors, isDark: boolean) {
       backgroundColor: colors.accent,
     },
     newsCard: {
-      gap: 10,
-      padding: 18,
-      borderRadius: 18,
-      borderWidth: 1,
+      // Cancel the Home content's 20-point side inset for news cards only.
+      marginHorizontal: -20,
+      padding: 0,
+      borderRadius: 0,
+      borderTopWidth: 1,
+      borderBottomWidth: 1,
       borderColor: colors.border,
       backgroundColor: colors.surface,
+      overflow: "hidden",
+    },
+    newsBody: {
+      paddingHorizontal: 12,
+      paddingVertical: 14,
+      gap: 10,
     },
     pressed: { opacity: 0.75 },
     newsSource: { color: colors.accent, fontSize: 13, fontWeight: "700" },

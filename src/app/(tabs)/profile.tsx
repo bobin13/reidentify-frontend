@@ -161,35 +161,92 @@ export default function ProfileScreen() {
             <Text accessibilityRole="header" style={styles.pageTitle}>
               My profile
             </Text>
-            <View style={styles.profileCard}>
-              <View style={styles.profileIdentity}>
-                <ProfileAvatar profile={user} />
-                <View style={styles.profileCopy}>
-                  <Text style={styles.name}>{user.fullName}</Text>
-                  <Text style={styles.subtitle}>
-                    {areaLabel(resolveArea(user.location)) ||
-                      user.area ||
-                      "Choose your area"}
-                  </Text>
-                  {user.age != null && (
-                    <Text style={styles.subtitle}>Age {user.age}</Text>
-                  )}
-                </View>
-              </View>
-              <Text selectable style={styles.email}>
-                {user.email}
-              </Text>
-              <Pressable
-                accessibilityRole="button"
-                onPress={() => setPage("edit")}
-                style={({ pressed }) => [
-                  styles.primaryButton,
-                  pressed && styles.pressed,
-                ]}
-              >
-                <Text style={styles.primaryButtonText}>Edit profile</Text>
-              </Pressable>
-            </View>
+<View style={styles.profileCard}>
+  <View style={styles.profileIdentity}>
+    <ProfileAvatar profile={user} />
+
+    <View style={styles.profileCopy}>
+      <Text style={styles.name}>{user.fullName}</Text>
+
+      <Text style={styles.subtitle}>
+        {areaLabel(resolveArea(user.location)) ||
+          user.area ||
+          "Choose your area"}
+      </Text>
+
+      {user.age != null && (
+        <Text style={styles.subtitle}>Age {user.age}</Text>
+      )}
+    </View>
+  </View>
+
+  <Text selectable style={styles.email}>
+    {user.email}
+  </Text>
+
+  <Text style={styles.accentText}>
+    {user.profileVisibility === "public"
+      ? "Public profile"
+      : "Private profile"}
+  </Text>
+
+  <Pressable
+    accessibilityRole="button"
+    onPress={() => setPage("edit")}
+    style={({ pressed }) => [
+      styles.primaryButton,
+      pressed && styles.pressed,
+    ]}
+  >
+    <Text style={styles.primaryButtonText}>Edit profile</Text>
+  </Pressable>
+</View>
+
+<View style={styles.detailCard}>
+  <Text accessibilityRole="header" style={styles.sectionTitle}>
+    About me
+  </Text>
+
+  <Text selectable style={styles.description}>
+    {user.aboutMe?.trim() || "No About me added yet."}
+  </Text>
+</View>
+
+<View style={styles.detailCard}>
+  <Text accessibilityRole="header" style={styles.sectionTitle}>
+    Interests
+  </Text>
+
+  {user.interests?.length ? (
+    <View
+      style={{
+        flexDirection: "row",
+        flexWrap: "wrap",
+        gap: 8,
+      }}
+    >
+      {[...new Set(user.interests)].map((interest) => (
+        <View
+          key={interest}
+          style={{
+            paddingHorizontal: 12,
+            paddingVertical: 8,
+            borderRadius: 12,
+            borderWidth: 1,
+            borderColor: colors.border,
+            backgroundColor: colors.background,
+          }}
+        >
+          <Text style={styles.subtitle}>{interest}</Text>
+        </View>
+      ))}
+    </View>
+  ) : (
+    <Text style={styles.description}>
+      No interests selected yet.
+    </Text>
+  )}
+</View>
           </>
         ) : (
           <>
