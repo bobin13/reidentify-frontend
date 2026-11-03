@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useAppTheme } from "../context/theme-context";
 import type { CommunityGroup } from "../lib/groups";
-
+import { ChatText } from "./chat-display";
 export function useGroupStyles() {
   const { colors } = useAppTheme();
   const s = useMemo(
@@ -192,31 +192,79 @@ export function GroupCard({
   group: CommunityGroup;
   onPress: () => void;
 }) {
-  const { s } = useGroupStyles();
+  const { s, colors } = useGroupStyles();
+
+  const memberLabel =
+    `${group.memberCount} ${
+      group.memberCount === 1 ? "member" : "members"
+    }`;
+
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`Open group ${group.name}`}
+      accessibilityLabel={`Open group ${group.name}. ${memberLabel}${
+        group.joined ? ". Joined" : ""
+      }${
+        group.unreadCount
+          ? `. ${group.unreadCount} unread messages`
+          : ""
+      }`}
       onPress={onPress}
-      style={s.card}
+      style={[
+        s.card,
+        {
+          minHeight: 72,
+          paddingVertical: 12,
+          gap: 6,
+        },
+      ]}
     >
-      <Text style={s.heading}>{group.name}</Text>
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 10,
+        }}
+      >
+        <Text
+          numberOfLines={2}
+          style={[
+            s.heading,
+            { flex: 1, minWidth: 0 },
+          ]}
+        >
+          {group.name}
+        </Text>
+
+        {group.unreadCount > 0 && (
+          <View
+            style={{
+              minWidth: 24,
+              paddingHorizontal: 8,
+              paddingVertical: 3,
+              borderRadius: 12,
+              backgroundColor: colors.accent,
+            }}
+          >
+            <Text
+              style={{
+                color: colors.background,
+                fontSize: 13,
+                lineHeight: 18,
+                fontWeight: "700",
+                textAlign: "center",
+              }}
+            >
+              {group.unreadCount}
+            </Text>
+          </View>
+        )}
+      </View>
+
       <Text style={s.muted}>
-        {group.area} · {group.memberCount}{" "}
-        {group.memberCount === 1 ? "member" : "members"}
+        {memberLabel}
       </Text>
-      <Text style={s.muted}>{group.interests.join(" · ")}</Text>
-      <Text style={s.body}>
-        {group.joined
-          ? group.preview
-          : group.description ||
-            "A public community group. Everyone is welcome to join."}
-      </Text>
-      <Text style={s.label}>
-        {group.joined ? "Joined" : "View group"}
-        {group.muted ? " · Muted" : ""}
-        {group.unreadCount ? ` · ${group.unreadCount} unread` : ""}
-      </Text>
+
       {group.warning && (
         <Text style={s.muted}>
           Inactivity deadline:{" "}

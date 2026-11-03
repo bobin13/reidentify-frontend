@@ -24,6 +24,10 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import {
+  ChatBubble,
+  useChatPhotos,
+} from "../../components/chat-display";
 import type { AppColors } from "../../constants/app-colors";
 import { useAuth } from "../../context/auth-context";
 import { useAppTheme } from "../../context/theme-context";
@@ -56,15 +60,24 @@ const empty: ChatState = {
 };
 
 export default function ConversationScreen() {
-  const params = useLocalSearchParams<{ id: string | string[] }>();
-  const id = Array.isArray(params.id) ? params.id[0] : params.id;
+  const params = useLocalSearchParams<{
+    id: string | string[];
+  }>();
+
+  const id = Array.isArray(params.id)
+    ? params.id[0]
+    : params.id;
 
   const { user } = useAuth();
   const uid = user?.id || "";
   const key = `${uid}:${id}`;
 
   const { colors } = useAppTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useMemo(
+    () => createStyles(colors),
+    [colors],
+  );
+
   const insets = useSafeAreaInsets();
 
   const [state, setState] = useState<ChatState>(empty);
@@ -81,7 +94,12 @@ export default function ConversationScreen() {
   const [olderLoading, setOlderLoading] = useState(false);
 
   const sendPending = useRef(false);
-  const retry = useRef<{ id: string; text: string } | null>(null);
+
+  const retry = useRef<{
+    id: string;
+    text: string;
+  } | null>(null);
+
   const list = useRef<FlatList<ChatMessage>>(null);
   const nearBottom = useRef(true);
 
@@ -98,13 +116,15 @@ export default function ConversationScreen() {
 
       let active = true;
       let busy = false;
+
       setLoadError("");
 
       async function refresh() {
         if (
           !active ||
           busy ||
-          (AppState.currentState && AppState.currentState !== "active")
+          (AppState.currentState &&
+            AppState.currentState !== "active")
         ) {
           return;
         }
@@ -113,12 +133,17 @@ export default function ConversationScreen() {
 
         try {
           const previous = current.current;
+
           const after =
-            previous.owner === key ? previous.syncedId : undefined;
+            previous.owner === key
+              ? previous.syncedId
+              : undefined;
 
           const page = await getMessages(uid, id, after);
 
-          if (!active || auth.currentUser?.uid !== uid) return;
+          if (!active || auth.currentUser?.uid !== uid) {
+            return;
+          }
 
           setLoadError("");
 
@@ -127,9 +152,12 @@ export default function ConversationScreen() {
               await markRead(
                 uid,
                 id,
-                after && after !== "none" ? after : null,
+                after && after !== "none"
+                  ? after
+                  : null,
               );
             }
+
             return;
           }
 
@@ -150,7 +178,10 @@ export default function ConversationScreen() {
             syncedId: latestId,
           }));
 
-          if (!page.hasMoreNew && page.conversation?.unreadCount) {
+          if (
+            !page.hasMoreNew &&
+            page.conversation?.unreadCount
+          ) {
             await markRead(
               uid,
               id,
@@ -158,7 +189,9 @@ export default function ConversationScreen() {
             );
           }
         } catch (failure) {
-          if (active) setLoadError(messageError(failure));
+          if (active) {
+            setLoadError(messageError(failure));
+          }
         } finally {
           busy = false;
         }
@@ -166,10 +199,19 @@ export default function ConversationScreen() {
 
       void refresh();
 
-      const timer = setInterval(() => void refresh(), 4000);
-      const subscription = AppState.addEventListener("change", (value) => {
-        if (value === "active") void refresh();
-      });
+      const timer = setInterval(
+        () => void refresh(),
+        4000,
+      );
+
+      const subscription = AppState.addEventListener(
+        "change",
+        (value) => {
+          if (value === "active") {
+            void refresh();
+          }
+        },
+      );
 
       return () => {
         active = false;
@@ -182,7 +224,9 @@ export default function ConversationScreen() {
   async function send() {
     const text = draft.trim();
 
-    if (!uid || !id || !text || sendPending.current) return;
+    if (!uid || !id || !text || sendPending.current) {
+      return;
+    }
 
     sendPending.current = true;
     setSending(true);
@@ -200,7 +244,12 @@ export default function ConversationScreen() {
     const request = retry.current;
 
     try {
-      const data = await sendMessage(uid, id, request.id, text);
+      const data = await sendMessage(
+        uid,
+        id,
+        request.id,
+        text,
+      );
 
       if (
         identity.current !== key ||
@@ -215,7 +264,10 @@ export default function ConversationScreen() {
         old.owner === key
           ? {
               ...old,
-              messages: mergeMessages(old.messages, [data.message]),
+              messages: mergeMessages(
+                old.messages,
+                [data.message],
+              ),
             }
           : old,
       );
@@ -247,7 +299,12 @@ export default function ConversationScreen() {
     setOlderLoading(true);
 
     try {
-      const page = await getMessages(uid, id, undefined, state.cursor);
+      const page = await getMessages(
+        uid,
+        id,
+        undefined,
+        state.cursor,
+      );
 
       if (
         identity.current === key &&
@@ -255,7 +312,10 @@ export default function ConversationScreen() {
       ) {
         setState((old) => ({
           ...old,
-          messages: mergeMessages(old.messages, page.messages || []),
+          messages: mergeMessages(
+            old.messages,
+            page.messages || [],
+          ),
           cursor: page.nextCursor || null,
         }));
       }
@@ -268,13 +328,23 @@ export default function ConversationScreen() {
     }
   }
 
-  const chat = state.owner === key ? state.chat : null;
-  const messages = state.owner === key ? state.messages : [];
+  const chat =
+    state.owner === key ? state.chat : null;
+
+  const messages =
+    state.owner === key ? state.messages : [];
+
+  const photos = useChatPhotos(
+    messages.map((message) => message.senderId),
+  );
 
   const goBack = () =>
-    router.canGoBack() ? router.back() : router.replace("/messages");
+    router.canGoBack()
+      ? router.back()
+      : router.replace("/messages");
 
-  const sendDisabled = !draft.trim() || sending || !chat;
+  const sendDisabled =
+    !draft.trim() || sending || !chat;
 
   if (!user) {
     return (
@@ -282,11 +352,14 @@ export default function ConversationScreen() {
         <Text style={styles.body}>
           Sign in to view this conversation.
         </Text>
+
         <Pressable
           style={styles.send}
           onPress={() => router.push("/profile")}
         >
-          <Text style={styles.sendText}>Go to profile</Text>
+          <Text style={styles.sendText}>
+            Go to profile
+          </Text>
         </Pressable>
       </View>
     );
@@ -295,7 +368,9 @@ export default function ConversationScreen() {
   return (
     <KeyboardAvoidingView
       style={styles.container}
-      behavior={Platform.OS === "ios" ? "padding" : "height"}
+      behavior={
+        Platform.OS === "ios" ? "padding" : "height"
+      }
     >
       <View style={styles.header}>
         <Pressable
@@ -311,14 +386,20 @@ export default function ConversationScreen() {
           <Text style={styles.title}>
             {chat?.name || "Conversation"}
           </Text>
+
           {!!chat?.handle && (
-            <Text style={styles.muted}>{chat.handle}</Text>
+            <Text style={styles.muted}>
+              {chat.handle}
+            </Text>
           )}
         </View>
       </View>
 
       {!!loadError && (
-        <Text accessibilityRole="alert" style={styles.error}>
+        <Text
+          accessibilityRole="alert"
+          style={styles.error}
+        >
           {loadError}
         </Text>
       )}
@@ -347,7 +428,9 @@ export default function ConversationScreen() {
         }}
         onContentSizeChange={() => {
           if (nearBottom.current) {
-            list.current?.scrollToEnd({ animated: false });
+            list.current?.scrollToEnd({
+              animated: false,
+            });
           }
         }}
         ListHeaderComponent={
@@ -358,7 +441,9 @@ export default function ConversationScreen() {
               onPress={() => void older()}
             >
               <Text style={styles.muted}>
-                {olderLoading ? "Loading…" : "Load older messages"}
+                {olderLoading
+                  ? "Loading…"
+                  : "Load older messages"}
               </Text>
             </Pressable>
           ) : null
@@ -370,45 +455,38 @@ export default function ConversationScreen() {
             </Text>
           ) : null
         }
-        renderItem={({ item }) => {
+        renderItem={({ item, index }) => {
           const own = item.senderId === uid;
+          const previous = messages[index - 1];
+
+          const continuing =
+            !!previous &&
+            previous.senderId === item.senderId;
 
           return (
-            <View
-              style={[
-                styles.group,
-                { alignSelf: own ? "flex-end" : "flex-start" },
-              ]}
-            >
-              <View
-                style={[
-                  styles.bubble,
-                  own && {
-                    backgroundColor: colors.accent,
-                    borderColor: colors.accent,
-                  },
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.body,
-                    own && { color: colors.background },
-                  ]}
-                >
-                  {item.text}
-                </Text>
-              </View>
-
-              <Text style={styles.muted}>
-                {timeLabel(item.createdAt)}
-              </Text>
-            </View>
+            <ChatBubble
+              own={own}
+              name={
+                own
+                  ? user.fullName
+                  : chat?.name || "Member"
+              }
+              photoUri={photos[item.senderId]}
+              text={item.text}
+              time={timeLabel(item.createdAt)}
+              createdAt={item.createdAt}
+              showSender={!continuing}
+              variant="direct"
+            />
           );
         }}
       />
 
       {!!sendError && (
-        <Text accessibilityRole="alert" style={styles.error}>
+        <Text
+          accessibilityRole="alert"
+          style={styles.error}
+        >
           {sendError}
         </Text>
       )}
@@ -416,7 +494,12 @@ export default function ConversationScreen() {
       <View
         style={[
           styles.composer,
-          { paddingBottom: Math.max(12, insets.bottom) },
+          {
+            paddingBottom: Math.max(
+              12,
+              insets.bottom,
+            ),
+          },
         ]}
       >
         <TextInput
@@ -445,7 +528,9 @@ export default function ConversationScreen() {
           ]}
         >
           {sending ? (
-            <ActivityIndicator color={colors.background} />
+            <ActivityIndicator
+              color={colors.background}
+            />
           ) : (
             <Text style={styles.sendText}>Send</Text>
           )}
@@ -457,7 +542,10 @@ export default function ConversationScreen() {
 
 function createStyles(colors: AppColors) {
   return StyleSheet.create({
-    container: { flex: 1, backgroundColor: colors.background },
+    container: {
+      flex: 1,
+      backgroundColor: colors.background,
+    },
     center: {
       flex: 1,
       padding: 24,
@@ -479,24 +567,32 @@ function createStyles(colors: AppColors) {
       justifyContent: "center",
       paddingHorizontal: 8,
     },
-    title: { color: colors.text, fontSize: 20, fontWeight: "700" },
-    body: { color: colors.text, fontSize: 17, lineHeight: 25 },
-    muted: { color: colors.muted, fontSize: 13, lineHeight: 19 },
+    title: {
+      color: colors.text,
+      fontSize: 20,
+      fontWeight: "700",
+    },
+    body: {
+      color: colors.text,
+      fontSize: 17,
+      lineHeight: 25,
+    },
+    muted: {
+      color: colors.muted,
+      fontSize: 13,
+      lineHeight: 19,
+    },
     messages: {
       flexGrow: 1,
       justifyContent: "flex-end",
-      gap: 16,
-      padding: 16,
+      gap: 0,
+      padding: 12,
     },
-    group: { maxWidth: "85%", gap: 5 },
-    bubble: {
-      backgroundColor: colors.surface,
-      borderColor: colors.border,
-      borderWidth: 1,
-      padding: 14,
-      borderRadius: 14,
+    error: {
+      color: colors.text,
+      fontSize: 15,
+      padding: 12,
     },
-    error: { color: colors.text, fontSize: 15, padding: 12 },
     composer: {
       flexDirection: "row",
       alignItems: "flex-end",

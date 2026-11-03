@@ -1,10 +1,20 @@
 import { useMemo } from "react";
 import { Link } from "expo-router";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import {
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 
 import type { AppColors } from "../constants/app-colors";
 import { useAppTheme } from "../context/theme-context";
 import type { Conversation } from "../data/sample-conversations";
+import {
+  ChatText,
+  hideSwearWords,
+  useChatFilter,
+} from "./chat-display";
 
 type MessageItemProps = {
   conversation: Conversation;
@@ -12,7 +22,12 @@ type MessageItemProps = {
 
 export function MessageItem({ conversation }: MessageItemProps) {
   const { colors } = useAppTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const { enabled } = useChatFilter();
+
+  const styles = useMemo(
+    () => createStyles(colors),
+    [colors],
+  );
 
   const initials = conversation.name
     .split(" ")
@@ -30,7 +45,11 @@ export function MessageItem({ conversation }: MessageItemProps) {
       asChild
     >
       <Pressable
-        accessibilityLabel={`Open conversation with ${conversation.name}. ${conversation.preview}`}
+        accessibilityLabel={`Open conversation with ${conversation.name}. ${
+          enabled
+            ? hideSwearWords(conversation.preview)
+            : conversation.preview
+        }`}
         accessibilityRole="button"
         style={({ pressed }) => [
           styles.row,
@@ -38,21 +57,29 @@ export function MessageItem({ conversation }: MessageItemProps) {
         ]}
       >
         <View style={styles.avatar}>
-          <Text style={styles.initials}>{initials}</Text>
+          <Text style={styles.initials}>
+            {initials}
+          </Text>
         </View>
 
         <View style={styles.details}>
           <View style={styles.nameLine}>
-            <Text style={styles.name}>{conversation.name}</Text>
+            <Text style={styles.name}>
+              {conversation.name}
+            </Text>
+
             <Text style={styles.timestamp}>
               {conversation.timestamp}
             </Text>
           </View>
 
           <View style={styles.previewLine}>
-            <Text numberOfLines={1} style={styles.preview}>
+            <ChatText
+              numberOfLines={1}
+              style={styles.preview}
+            >
               {conversation.preview}
-            </Text>
+            </ChatText>
 
             {conversation.unreadCount > 0 && (
               <View style={styles.unreadBadge}>
@@ -82,9 +109,11 @@ function createStyles(colors: AppColors) {
       borderRadius: 8,
       backgroundColor: colors.surface,
     },
+
     pressed: {
       opacity: 0.72,
     },
+
     avatar: {
       width: 48,
       height: 48,
@@ -93,40 +122,48 @@ function createStyles(colors: AppColors) {
       justifyContent: "center",
       backgroundColor: colors.accent,
     },
+
     initials: {
       color: colors.background,
       fontSize: 14,
       fontWeight: "700",
     },
+
     details: {
       flex: 1,
       gap: 6,
     },
+
     nameLine: {
       flexDirection: "row",
       alignItems: "center",
       justifyContent: "space-between",
       gap: 12,
     },
+
     name: {
       color: colors.text,
       fontSize: 15,
       fontWeight: "700",
     },
+
     timestamp: {
       color: colors.muted,
       fontSize: 12,
     },
+
     previewLine: {
       flexDirection: "row",
       alignItems: "center",
       gap: 12,
     },
+
     preview: {
       flex: 1,
       color: colors.muted,
       fontSize: 13,
     },
+
     unreadBadge: {
       minWidth: 20,
       height: 20,
@@ -136,6 +173,7 @@ function createStyles(colors: AppColors) {
       borderRadius: 10,
       backgroundColor: colors.accent,
     },
+
     unreadCount: {
       color: colors.background,
       fontSize: 11,

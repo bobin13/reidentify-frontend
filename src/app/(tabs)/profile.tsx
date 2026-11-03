@@ -1,8 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+
 import { useFocusEffect } from "expo-router";
 import { SymbolView } from "expo-symbols";
-import { ActivityIndicator } from "react-native";
+
 import {
+  ActivityIndicator,
   Alert,
   BackHandler,
   Image,
@@ -19,35 +27,71 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 
+import { SafeAreaView } from "react-native-safe-area-context";
+import * as ImagePicker from "expo-image-picker";
+
+import {
+  ImageManipulator,
+  SaveFormat,
+} from "expo-image-manipulator";
+
+import { ChatFilterSetting } from "../../components/chat-display";
 import { AuthScreen, FormField } from "../../components/auth-screen";
 import { AreaField } from "../../components/area-field";
+
 import {
   areaLabel,
   resolveArea,
   selectionForProfile,
 } from "../../lib/locations";
+
 import type { AppColors } from "../../constants/app-colors";
+
 import {
   useAuth,
   type AppUser,
   type ProfilePhotoChange,
 } from "../../context/auth-context";
+
 import { useAppTheme } from "../../context/theme-context";
 import { auth } from "../../lib/firebase";
 import { apiRequest } from "../../lib/api";
-import * as ImagePicker from "expo-image-picker";
-import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
 
-type Page = "overview" | "login" | "register" | "edit" | "settings";
+type Page =
+  | "overview"
+  | "login"
+  | "register"
+  | "edit"
+  | "settings";
 
-const AGE_OPTIONS = Array.from({ length: 120 }, (_, index) => String(index + 1));
+const AGE_OPTIONS = Array.from(
+  { length: 120 },
+  (_, index) => String(index + 1),
+);
+
+const GENDER_OPTIONS = [
+  "Woman",
+  "Man",
+  "Non-binary",
+] as const;
 
 export default function ProfileScreen() {
   const { colors } = useAppTheme();
-  const { user, signOut, loading, authError, refreshProfile } = useAuth();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+
+  const {
+    user,
+    signOut,
+    loading,
+    authError,
+    refreshProfile,
+  } = useAuth();
+
+  const styles = useMemo(
+    () => createStyles(colors),
+    [colors],
+  );
+
   const [page, setPage] = useState<Page>("overview");
 
   useFocusEffect(
@@ -56,13 +100,16 @@ export default function ProfileScreen() {
         "hardwareBackPress",
         () => {
           if (page === "overview") return false;
+
           setPage("overview");
           return true;
         },
       );
+
       return () => subscription.remove();
     }, [page]),
   );
+
   if (page === "overview" && loading) {
     return (
       <View
@@ -74,11 +121,18 @@ export default function ProfileScreen() {
           backgroundColor: colors.background,
         }}
       >
-        <ActivityIndicator size="large" color={colors.accent} />
-        <Text style={{ color: colors.text }}>Loading your profile…</Text>
+        <ActivityIndicator
+          size="large"
+          color={colors.accent}
+        />
+
+        <Text style={{ color: colors.text }}>
+          Loading your profile…
+        </Text>
       </View>
     );
   }
+
   if (page === "login" || page === "register") {
     return (
       <AuthScreen
@@ -101,13 +155,23 @@ export default function ProfileScreen() {
   }
 
   if (page === "settings") {
-    return <Settings onClose={() => setPage("overview")} />;
+    return (
+      <Settings
+        onClose={() => setPage("overview")}
+      />
+    );
   }
 
   return (
-    <SafeAreaView style={styles.container} edges={["top"]}>
+    <SafeAreaView
+      style={styles.container}
+      edges={["top"]}
+    >
       <ScrollView
-        contentContainerStyle={[styles.content, user && styles.signedInContent]}
+        contentContainerStyle={[
+          styles.content,
+          user && styles.signedInContent,
+        ]}
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.brandRow}>
@@ -115,8 +179,12 @@ export default function ProfileScreen() {
             <View style={styles.logo}>
               <Text style={styles.logoText}>R</Text>
             </View>
-            <Text style={styles.brandText}>ReIdentify</Text>
+
+            <Text style={styles.brandText}>
+              ReIdentify
+            </Text>
           </View>
+
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Open settings"
@@ -127,13 +195,20 @@ export default function ProfileScreen() {
             ]}
           >
             <SymbolView
-              name={{ ios: "gearshape", android: "settings", web: "settings" }}
+              name={{
+                ios: "gearshape",
+                android: "settings",
+                web: "settings",
+              }}
               size={20}
               tintColor={colors.accent}
               accessibilityElementsHidden
               importantForAccessibility="no-hide-descendants"
             />
-            <Text style={styles.settingsText}>Settings</Text>
+
+            <Text style={styles.settingsText}>
+              Settings
+            </Text>
           </Pressable>
         </View>
 
@@ -141,7 +216,10 @@ export default function ProfileScreen() {
           <View style={styles.section}>
             <Text
               accessibilityRole="alert"
-              style={{ color: colors.text, fontSize: 16 }}
+              style={{
+                color: colors.text,
+                fontSize: 16,
+              }}
             >
               {authError}
             </Text>
@@ -151,102 +229,132 @@ export default function ProfileScreen() {
               onPress={() => void refreshProfile()}
               style={styles.outlineButton}
             >
-              <Text style={styles.outlineButtonText}>Try again</Text>
+              <Text style={styles.outlineButtonText}>
+                Try again
+              </Text>
             </Pressable>
           </View>
         )}
 
         {user ? (
           <>
-            <Text accessibilityRole="header" style={styles.pageTitle}>
+            <Text
+              accessibilityRole="header"
+              style={styles.pageTitle}
+            >
               My profile
             </Text>
-<View style={styles.profileCard}>
-  <View style={styles.profileIdentity}>
-    <ProfileAvatar profile={user} />
 
-    <View style={styles.profileCopy}>
-      <Text style={styles.name}>{user.fullName}</Text>
+            <View style={styles.profileCard}>
+              <View style={styles.profileIdentity}>
+                <ProfileAvatar profile={user} />
 
-      <Text style={styles.subtitle}>
-        {areaLabel(resolveArea(user.location)) ||
-          user.area ||
-          "Choose your area"}
-      </Text>
+                <View style={styles.profileCopy}>
+                  <Text style={styles.name}>
+                    {user.fullName}
+                  </Text>
 
-      {user.age != null && (
-        <Text style={styles.subtitle}>Age {user.age}</Text>
-      )}
-    </View>
-  </View>
+                  <Text style={styles.subtitle}>
+                    {areaLabel(
+                      resolveArea(user.location),
+                    ) ||
+                      user.area ||
+                      "Choose your area"}
+                  </Text>
 
-  <Text selectable style={styles.email}>
-    {user.email}
-  </Text>
+                  <View style={styles.profileMeta}>
+                    {user.age != null && (
+                      <Text
+                        style={styles.profileMetaText}
+                      >
+                        Age {user.age}
+                      </Text>
+                    )}
 
-  <Text style={styles.accentText}>
-    {user.profileVisibility === "public"
-      ? "Public profile"
-      : "Private profile"}
-  </Text>
+                    <Text
+                      selectable
+                      style={styles.profileMetaText}
+                    >
+                      {user.email}
+                    </Text>
+                  </View>
 
-  <Pressable
-    accessibilityRole="button"
-    onPress={() => setPage("edit")}
-    style={({ pressed }) => [
-      styles.primaryButton,
-      pressed && styles.pressed,
-    ]}
-  >
-    <Text style={styles.primaryButtonText}>Edit profile</Text>
-  </Pressable>
-</View>
+                  {!!user.gender && (
+                    <Text
+                      style={styles.profileMetaText}
+                    >
+                      {user.gender}
+                    </Text>
+                  )}
+                </View>
+              </View>
 
-<View style={styles.detailCard}>
-  <Text accessibilityRole="header" style={styles.sectionTitle}>
-    About me
-  </Text>
+              <Text style={styles.accentText}>
+                {user.profileVisibility === "public"
+                  ? "Public profile"
+                  : "Private profile"}
+              </Text>
 
-  <Text selectable style={styles.description}>
-    {user.aboutMe?.trim() || "No About me added yet."}
-  </Text>
-</View>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => setPage("edit")}
+                style={({ pressed }) => [
+                  styles.primaryButton,
+                  styles.editProfileButton,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text
+                  style={styles.editProfileButtonText}
+                >
+                  Edit profile
+                </Text>
+              </Pressable>
+            </View>
 
-<View style={styles.detailCard}>
-  <Text accessibilityRole="header" style={styles.sectionTitle}>
-    Interests
-  </Text>
+            <View style={styles.detailCard}>
+              <Text
+                accessibilityRole="header"
+                style={styles.sectionTitle}
+              >
+                About me
+              </Text>
 
-  {user.interests?.length ? (
-    <View
-      style={{
-        flexDirection: "row",
-        flexWrap: "wrap",
-        gap: 8,
-      }}
-    >
-      {[...new Set(user.interests)].map((interest) => (
-        <View
-          key={interest}
-          style={{
-            paddingHorizontal: 12,
-            paddingVertical: 8,
-            borderRadius: 12,
-            borderWidth: 1,
-            borderColor: colors.border,
-            backgroundColor: colors.background,
-          }}
-        >
-          <Text style={styles.subtitle}>{interest}</Text>
-        </View>
-      ))}
-    </View>
-  ) : (
-    <Text style={styles.description}>
-      No interests selected yet.
-    </Text>
-  )}
-</View>
+              <Text style={styles.description}>
+                {user.aboutMe?.trim() ||
+                  "Add a little about yourself in Edit profile."}
+              </Text>
+            </View>
+
+            <View style={styles.detailCard}>
+              <Text
+                accessibilityRole="header"
+                style={styles.sectionTitle}
+              >
+                Your interests
+              </Text>
+
+              {user.interests.length > 0 ? (
+                <View style={styles.interestWrap}>
+                  {user.interests.map((interest) => (
+                    <View
+                      key={interest}
+                      style={styles.interestChip}
+                    >
+                      <Text
+                        style={styles.interestText}
+                      >
+                        {interest}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              ) : (
+                <Text style={styles.description}>
+                  Choose your interests in Search.
+                </Text>
+              )}
+            </View>
           </>
         ) : (
           <>
@@ -256,27 +364,64 @@ export default function ProfileScreen() {
                 accessibilityElementsHidden
                 importantForAccessibility="no-hide-descendants"
               >
-                <View style={[styles.artAvatar, styles.artLeft]}>
-                  <Text style={styles.artAvatarText}>M</Text>
-                </View>
-                <View style={[styles.artAvatar, styles.artCenter]}>
+                <View
+                  style={[
+                    styles.artAvatar,
+                    styles.artLeft,
+                  ]}
+                >
                   <Text
-                    style={[styles.artAvatarText, { color: colors.background }]}
+                    style={styles.artAvatarText}
+                  >
+                    M
+                  </Text>
+                </View>
+
+                <View
+                  style={[
+                    styles.artAvatar,
+                    styles.artCenter,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.artAvatarText,
+                      {
+                        color: colors.background,
+                      },
+                    ]}
                   >
                     R
                   </Text>
                 </View>
-                <View style={[styles.artAvatar, styles.artRight]}>
-                  <Text style={styles.artAvatarText}>J</Text>
+
+                <View
+                  style={[
+                    styles.artAvatar,
+                    styles.artRight,
+                  ]}
+                >
+                  <Text
+                    style={styles.artAvatarText}
+                  >
+                    J
+                  </Text>
                 </View>
               </View>
-              <Text accessibilityRole="header" style={styles.welcomeTitle}>
+
+              <Text
+                accessibilityRole="header"
+                style={styles.welcomeTitle}
+              >
                 Good company starts here.
               </Text>
+
               <Text style={styles.welcomeSubtitle}>
-                Meet people who share your interests. Find local activities and
-                make new connections at your own pace.
+                Meet people who share your interests.
+                Find local activities and make new
+                connections at your own pace.
               </Text>
+
               <View style={styles.welcomeActions}>
                 <Pressable
                   accessibilityRole="button"
@@ -286,8 +431,13 @@ export default function ProfileScreen() {
                     pressed && styles.pressed,
                   ]}
                 >
-                  <Text style={styles.primaryButtonText}>Sign in</Text>
+                  <Text
+                    style={styles.primaryButtonText}
+                  >
+                    Sign in
+                  </Text>
                 </Pressable>
+
                 <Pressable
                   accessibilityRole="button"
                   onPress={() => setPage("register")}
@@ -296,22 +446,32 @@ export default function ProfileScreen() {
                     pressed && styles.pressed,
                   ]}
                 >
-                  <Text style={styles.outlineButtonText}>Create account</Text>
+                  <Text
+                    style={styles.outlineButtonText}
+                  >
+                    Create account
+                  </Text>
                 </Pressable>
               </View>
             </View>
 
             <View style={styles.section}>
-              <Text accessibilityRole="header" style={styles.sectionTitle}>
+              <Text
+                accessibilityRole="header"
+                style={styles.sectionTitle}
+              >
                 A little more connection
               </Text>
+
               <View style={styles.benefits}>
                 <Text style={styles.benefit}>
                   Find groups around your interests
                 </Text>
+
                 <Text style={styles.benefit}>
                   Discover activities close to home
                 </Text>
+
                 <Text style={styles.benefit}>
                   Keep in touch with your community
                 </Text>
@@ -330,7 +490,10 @@ export default function ProfileScreen() {
                 if (result.ok) {
                   setPage("overview");
                 } else {
-                  Alert.alert("Sign out", result.message);
+                  Alert.alert(
+                    "Sign out",
+                    result.message,
+                  );
                 }
               }}
               style={({ pressed }) => [
@@ -338,7 +501,9 @@ export default function ProfileScreen() {
                 pressed && styles.pressed,
               ]}
             >
-              <Text style={styles.signOutText}>Sign out</Text>
+              <Text style={styles.signOutText}>
+                Sign out
+              </Text>
             </Pressable>
           </View>
         )}
@@ -351,26 +516,44 @@ function ProfileAvatar({
   profile,
   previewUri,
 }: {
-  profile: Pick<AppUser, "id" | "fullName" | "photoVersion">;
+  profile: Pick<
+    AppUser,
+    "id" | "fullName" | "photoVersion"
+  >;
   previewUri?: string;
 }) {
   const { colors } = useAppTheme();
   const { user } = useAuth();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+
+  const styles = useMemo(
+    () => createStyles(colors),
+    [colors],
+  );
+
   const viewer = user?.id || "";
-  const key = `${viewer}:${profile.id}:${profile.photoVersion || ""}`;
-  const [image, setImage] = useState({ key: "", uri: "" });
+  const key =
+    `${viewer}:${profile.id}:${profile.photoVersion || ""}`;
+
+  const [image, setImage] = useState({
+    key: "",
+    uri: "",
+  });
+
   const [failedUri, setFailedUri] = useState("");
+
   useEffect(() => {
     let active = true;
     const account = auth.currentUser;
+
     if (
       previewUri !== undefined ||
       !profile.photoVersion ||
       !account ||
       account.uid !== viewer
-    )
+    ) {
       return;
+    }
+
     void apiRequest<{ jpeg: string }>(
       account,
       "GET",
@@ -379,19 +562,43 @@ function ProfileAvatar({
       { timeoutMs: 25000 },
     )
       .then((data) => {
-        if (active && auth.currentUser?.uid === viewer)
-          setImage({ key, uri: `data:image/jpeg;base64,${data.jpeg}` });
+        if (
+          active &&
+          auth.currentUser?.uid === viewer
+        ) {
+          setImage({
+            key,
+            uri: `data:image/jpeg;base64,${data.jpeg}`,
+          });
+        }
       })
       .catch(() => {
-        if (active) setImage({ key, uri: "" });
+        if (active) {
+          setImage({ key, uri: "" });
+        }
       });
+
     return () => {
       active = false;
     };
-  }, [key, viewer, profile.id, profile.photoVersion, previewUri]);
+  }, [
+    key,
+    viewer,
+    profile.id,
+    profile.photoVersion,
+    previewUri,
+  ]);
+
   const candidate =
-    previewUri !== undefined ? previewUri : image.key === key ? image.uri : "";
-  const uri = candidate === failedUri ? "" : candidate;
+    previewUri !== undefined
+      ? previewUri
+      : image.key === key
+        ? image.uri
+        : "";
+
+  const uri =
+    candidate === failedUri ? "" : candidate;
+
   return (
     <View style={styles.avatar}>
       {uri ? (
@@ -402,7 +609,9 @@ function ProfileAvatar({
           onError={() => setFailedUri(candidate)}
         />
       ) : (
-        <Text style={styles.avatarText}>{getInitials(profile.fullName)}</Text>
+        <Text style={styles.avatarText}>
+          {getInitials(profile.fullName)}
+        </Text>
       )}
     </View>
   );
@@ -418,42 +627,104 @@ function ProfilePreview({
   backLabel?: string;
 }) {
   const { colors } = useAppTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+
+  const styles = useMemo(
+    () => createStyles(colors),
+    [colors],
+  );
+
   return (
-    <SafeAreaView style={styles.container} edges={["top"]}>
-      <ScrollView contentContainerStyle={styles.content}>
+    <SafeAreaView
+      style={styles.container}
+      edges={["top"]}
+    >
+      <ScrollView
+        contentContainerStyle={styles.content}
+      >
         <Pressable
           accessibilityRole="button"
           onPress={onClose}
           style={styles.backButton}
         >
-          <Text style={styles.accentText}>{backLabel}</Text>
+          <Text style={styles.accentText}>
+            {backLabel}
+          </Text>
         </Pressable>
-        <Text accessibilityRole="header" style={styles.pageTitle}>
+
+        <Text
+          accessibilityRole="header"
+          style={styles.pageTitle}
+        >
           Shared profile preview
         </Text>
+
         <Text style={styles.description}>
           {user.profileVisibility === "public"
             ? "This is what other signed-in members can see."
             : "Your profile is private. This preview is visible only to you."}
         </Text>
+
         <View style={styles.detailCard}>
           <View style={styles.profileIdentity}>
             <ProfileAvatar profile={user} />
+
             <View style={styles.profileCopy}>
-              <Text style={styles.name}>{user.fullName}</Text>
-              <Text style={styles.subtitle}>
-                {areaLabel(resolveArea(user.location)) || user.area}
+              <Text style={styles.name}>
+                {user.fullName}
               </Text>
+
+              <Text style={styles.subtitle}>
+                {areaLabel(
+                  resolveArea(user.location),
+                ) || user.area}
+              </Text>
+
               {user.age != null && (
-                <Text style={styles.subtitle}>Age {user.age}</Text>
+                <Text style={styles.subtitle}>
+                  Age {user.age}
+                </Text>
+              )}
+
+              {!!user.gender && (
+                <Text style={styles.subtitle}>
+                  {user.gender}
+                </Text>
               )}
             </View>
           </View>
+
           {!!user.aboutMe && (
             <>
-              <Text style={styles.sectionTitle}>About me</Text>
-              <Text style={styles.description}>{user.aboutMe}</Text>
+              <Text style={styles.sectionTitle}>
+                About me
+              </Text>
+
+              <Text style={styles.description}>
+                {user.aboutMe}
+              </Text>
+            </>
+          )}
+
+          {user.interests.length > 0 && (
+            <>
+              <Text style={styles.sectionTitle}>
+                Interests
+              </Text>
+
+              <View style={styles.interestWrap}>
+                {user.interests.map((interest) => (
+                  <View
+                    key={interest}
+                    style={styles.interestChip}
+                  >
+                    <Text
+                      style={styles.interestText}
+                    >
+                      {interest}
+                    </Text>
+                  </View>
+                ))}
+              </View>
             </>
           )}
         </View>
@@ -462,39 +733,74 @@ function ProfilePreview({
   );
 }
 
-function Settings({ onClose }: { onClose: () => void }) {
-  const { colors, theme, toggleTheme } = useAppTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+function Settings({
+  onClose,
+}: {
+  onClose: () => void;
+}) {
+  const {
+    colors,
+    theme,
+    toggleTheme,
+  } = useAppTheme();
+
+  const styles = useMemo(
+    () => createStyles(colors),
+    [colors],
+  );
+
   return (
-    <SafeAreaView style={styles.container} edges={["top"]}>
-      <ScrollView contentContainerStyle={styles.content}>
+    <SafeAreaView
+      style={styles.container}
+      edges={["top"]}
+    >
+      <ScrollView
+        contentContainerStyle={styles.content}
+      >
         <Pressable
           accessibilityRole="button"
           onPress={onClose}
           style={styles.backButton}
         >
-          <Text style={styles.accentText}>← Back to profile</Text>
+          <Text style={styles.accentText}>
+            ← Back to profile
+          </Text>
         </Pressable>
-        <Text accessibilityRole="header" style={styles.pageTitle}>
+
+        <Text
+          accessibilityRole="header"
+          style={styles.pageTitle}
+        >
           Settings
         </Text>
+
         <View style={styles.menu}>
+          <ChatFilterSetting />
+
           <View style={styles.themeRow}>
             <View style={styles.menuCopy}>
-              <Text style={styles.menuTitle}>Dark mode</Text>
+              <Text style={styles.menuTitle}>
+                Dark mode
+              </Text>
+
               <Text style={styles.menuDetail}>
                 {theme === "dark" ? "On" : "Off"}
               </Text>
             </View>
+
             <Switch
               accessibilityLabel="Dark mode"
               value={theme === "dark"}
               onValueChange={() => void toggleTheme()}
-              trackColor={{ false: colors.border, true: colors.accent }}
+              trackColor={{
+                false: colors.border,
+                true: colors.accent,
+              }}
               thumbColor={colors.surface}
               ios_backgroundColor={colors.border}
             />
           </View>
+
           <MenuRow
             title="Notification settings"
             detail="Not available yet"
@@ -505,6 +811,7 @@ function Settings({ onClose }: { onClose: () => void }) {
               )
             }
           />
+
           <MenuRow
             title="Privacy"
             onPress={() =>
@@ -514,6 +821,7 @@ function Settings({ onClose }: { onClose: () => void }) {
               )
             }
           />
+
           <MenuRow
             title="Help & support"
             onPress={() =>
@@ -542,7 +850,12 @@ function MenuRow({
   last?: boolean;
 }) {
   const { colors } = useAppTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+
+  const styles = useMemo(
+    () => createStyles(colors),
+    [colors],
+  );
+
   return (
     <Pressable
       accessibilityRole="button"
@@ -554,10 +867,21 @@ function MenuRow({
       ]}
     >
       <View style={styles.menuCopy}>
-        <Text style={styles.menuTitle}>{title}</Text>
-        {detail && <Text style={styles.menuDetail}>{detail}</Text>}
+        <Text style={styles.menuTitle}>
+          {title}
+        </Text>
+
+        {detail && (
+          <Text style={styles.menuDetail}>
+            {detail}
+          </Text>
+        )}
       </View>
-      <Text style={styles.chevron} accessibilityElementsHidden>
+
+      <Text
+        style={styles.chevron}
+        accessibilityElementsHidden
+      >
         ›
       </Text>
     </Pressable>
@@ -575,20 +899,35 @@ function AgeDropdown({
 }) {
   const { colors } = useAppTheme();
   const { fontScale } = useWindowDimensions();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+
+  const styles = useMemo(
+    () => createStyles(colors),
+    [colors],
+  );
+
   const [open, setOpen] = useState(false);
   const list = useRef<ScrollView>(null);
-  const rowHeight = Math.max(56, Math.ceil(24 * fontScale + 24));
+
+  const rowHeight = Math.max(
+    56,
+    Math.ceil(24 * fontScale + 24),
+  );
+
   const close = () => setOpen(false);
 
   function option(age: string) {
     const selected = value === age;
+
     return (
       <Pressable
         key={age || "not-set"}
         accessibilityRole="radio"
-        accessibilityLabel={age ? `Age ${age}` : "Age not set"}
-        accessibilityState={{ checked: selected }}
+        accessibilityLabel={
+          age ? `Age ${age}` : "Age not set"
+        }
+        accessibilityState={{
+          checked: selected,
+        }}
         onPress={() => {
           onChange(age);
           close();
@@ -600,11 +939,20 @@ function AgeDropdown({
           pressed && styles.pressed,
         ]}
       >
-        <Text style={[styles.ageOptionText, selected && styles.ageSelectedText]}>
+        <Text
+          style={[
+            styles.ageOptionText,
+            selected && styles.ageSelectedText,
+          ]}
+        >
           {age || "Not set"}
         </Text>
+
         {selected && (
-          <Text style={styles.ageSelectedText} importantForAccessibility="no">
+          <Text
+            style={styles.ageSelectedText}
+            importantForAccessibility="no"
+          >
             ✓
           </Text>
         )}
@@ -614,13 +962,21 @@ function AgeDropdown({
 
   return (
     <View style={styles.section}>
-      <Text style={styles.menuTitle}>Age (optional)</Text>
+      <Text style={styles.menuTitle}>
+        Age (optional)
+      </Text>
+
       <Pressable
         accessibilityRole="combobox"
         accessibilityLabel="Age (optional)"
-        accessibilityValue={{ text: value || "Not set" }}
+        accessibilityValue={{
+          text: value || "Not set",
+        }}
         accessibilityHint="Opens a list of ages. Choose Not set to leave your age blank."
-        accessibilityState={{ expanded: open, disabled }}
+        accessibilityState={{
+          expanded: open,
+          disabled,
+        }}
         disabled={disabled}
         onPress={() => {
           Keyboard.dismiss();
@@ -631,17 +987,30 @@ function AgeDropdown({
           (pressed || disabled) && styles.pressed,
         ]}
       >
-        <Text style={value ? styles.ageOptionText : styles.agePlaceholder}>
+        <Text
+          style={[
+            value
+              ? styles.ageOptionText
+              : styles.agePlaceholder,
+            { flex: 1, flexShrink: 1 },
+          ]}
+        >
           {value || "Not set"}
         </Text>
+
         <SymbolView
-          name={{ ios: "chevron.down", android: "expand_more", web: "expand_more" }}
+          name={{
+            ios: "chevron.down",
+            android: "expand_more",
+            web: "expand_more",
+          }}
           size={22}
           tintColor={colors.muted}
           accessibilityElementsHidden
           importantForAccessibility="no-hide-descendants"
         />
       </Pressable>
+
       {open && (
         <Modal
           transparent
@@ -650,7 +1019,11 @@ function AgeDropdown({
           onRequestClose={close}
           onShow={() =>
             list.current?.scrollTo({
-              y: Math.max(0, (Number(value || 1) - 3) * rowHeight),
+              y: Math.max(
+                0,
+                (Number(value || 1) - 3) *
+                  rowHeight,
+              ),
               animated: false,
             })
           }
@@ -662,31 +1035,216 @@ function AgeDropdown({
               importantForAccessibility="no"
               onPress={close}
             />
+
             <View
               style={styles.ageMenu}
               accessibilityViewIsModal
               onAccessibilityEscape={close}
             >
               <View style={styles.ageMenuHeader}>
-                <Text accessibilityRole="header" style={styles.ageMenuTitle}>
+                <Text
+                  accessibilityRole="header"
+                  style={styles.ageMenuTitle}
+                >
                   Choose age
                 </Text>
+
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel="Close age list"
                   onPress={close}
                   style={styles.ageCloseButton}
                 >
-                  <Text style={styles.accentText}>Close</Text>
+                  <Text style={styles.accentText}>
+                    Close
+                  </Text>
                 </Pressable>
               </View>
+
               {option("")}
+
               <ScrollView
                 ref={list}
                 style={styles.ageList}
                 keyboardShouldPersistTaps="handled"
               >
                 {AGE_OPTIONS.map(option)}
+              </ScrollView>
+            </View>
+          </View>
+        </Modal>
+      )}
+    </View>
+  );
+}
+
+function GenderDropdown({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: AppUser["gender"];
+  onChange: (
+    value: AppUser["gender"],
+  ) => void;
+  disabled: boolean;
+}) {
+  const { colors } = useAppTheme();
+
+  const styles = useMemo(
+    () => createStyles(colors),
+    [colors],
+  );
+
+  const [open, setOpen] = useState(false);
+  const close = () => setOpen(false);
+
+  return (
+    <View style={styles.section}>
+      <Text style={styles.menuTitle}>
+        Gender (optional)
+      </Text>
+
+      <Pressable
+        accessibilityRole="combobox"
+        accessibilityLabel="Gender (optional)"
+        accessibilityValue={{
+          text: value || "Not set",
+        }}
+        accessibilityState={{
+          expanded: open,
+          disabled,
+        }}
+        disabled={disabled}
+        onPress={() => {
+          Keyboard.dismiss();
+          setOpen(true);
+        }}
+        style={({ pressed }) => [
+          styles.ageDropdown,
+          (pressed || disabled) && styles.pressed,
+        ]}
+      >
+        <Text
+          style={[
+            value
+              ? styles.ageOptionText
+              : styles.agePlaceholder,
+            { flex: 1, flexShrink: 1 },
+          ]}
+        >
+          {value || "Not set"}
+        </Text>
+
+        <SymbolView
+          name={{
+            ios: "chevron.down",
+            android: "expand_more",
+            web: "expand_more",
+          }}
+          size={22}
+          tintColor={colors.muted}
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+        />
+      </Pressable>
+
+      {open && (
+        <Modal
+          transparent
+          animationType="fade"
+          visible
+          onRequestClose={close}
+        >
+          <View style={styles.ageOverlay}>
+            <Pressable
+              style={StyleSheet.absoluteFill}
+              accessible={false}
+              importantForAccessibility="no"
+              onPress={close}
+            />
+
+            <View
+              style={styles.ageMenu}
+              accessibilityViewIsModal
+              onAccessibilityEscape={close}
+            >
+              <View style={styles.ageMenuHeader}>
+                <Text
+                  accessibilityRole="header"
+                  style={styles.ageMenuTitle}
+                >
+                  Choose gender
+                </Text>
+
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Close gender list"
+                  onPress={close}
+                  style={styles.ageCloseButton}
+                >
+                  <Text style={styles.accentText}>
+                    Close
+                  </Text>
+                </Pressable>
+              </View>
+
+              <ScrollView
+                style={styles.ageList}
+                keyboardShouldPersistTaps="handled"
+              >
+                {[null, ...GENDER_OPTIONS].map(
+                  (gender) => {
+                    const selected =
+                      (value ?? null) === gender;
+
+                    return (
+                      <Pressable
+                        key={gender || "not-set"}
+                        accessibilityRole="radio"
+                        accessibilityLabel={
+                          gender ||
+                          "Gender not set"
+                        }
+                        accessibilityState={{
+                          checked: selected,
+                        }}
+                        onPress={() => {
+                          onChange(gender);
+                          close();
+                        }}
+                        style={({ pressed }) => [
+                          styles.ageOption,
+                          { minHeight: 56 },
+                          selected &&
+                            styles.ageOptionSelected,
+                          pressed && styles.pressed,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.ageOptionText,
+                            selected &&
+                              styles.ageSelectedText,
+                          ]}
+                        >
+                          {gender || "Not set"}
+                        </Text>
+
+                        {selected && (
+                          <Text
+                            style={
+                              styles.ageSelectedText
+                            }
+                            importantForAccessibility="no"
+                          >
+                            ✓
+                          </Text>
+                        )}
+                      </Pressable>
+                    );
+                  },
+                )}
               </ScrollView>
             </View>
           </View>
@@ -704,24 +1262,63 @@ function EditProfile({
   onClose: () => void;
 }) {
   const { colors } = useAppTheme();
-  const { updateProfile, changeProfilePhoto } = useAuth();
-  const styles = useMemo(() => createStyles(colors), [colors]);
-  const [fullName, setFullName] = useState(user.fullName);
-  const [location, setLocation] = useState(() => selectionForProfile(user));
-  const [locationError, setLocationError] = useState("");
+
+  const {
+    updateProfile,
+    changeProfilePhoto,
+  } = useAuth();
+
+  const styles = useMemo(
+    () => createStyles(colors),
+    [colors],
+  );
+
+  const [fullName, setFullName] =
+    useState(user.fullName);
+
+  const [location, setLocation] = useState(() =>
+    selectionForProfile(user),
+  );
+
+  const [locationError, setLocationError] =
+    useState("");
+
   const [saving, setSaving] = useState(false);
   const saveLock = useRef(false);
+
   const [error, setError] = useState("");
-  const [aboutMe, setAboutMe] = useState(user.aboutMe || "");
-  const [age, setAge] = useState(user.age == null ? "" : String(user.age));
-  const [isPublic, setIsPublic] = useState(user.profileVisibility === "public");
-  const [previewing, setPreviewing] = useState(false);
-  const [photo, setPhoto] = useState<ProfilePhotoChange | null>(null);
-  const [choosing, setChoosing] = useState(false);
-  const alive = useRef(true),
-    picking = useRef(false);
+
+  const [aboutMe, setAboutMe] =
+    useState(user.aboutMe || "");
+
+  const [age, setAge] = useState(
+    user.age == null ? "" : String(user.age),
+  );
+
+  const [gender, setGender] =
+    useState<AppUser["gender"]>(
+      user.gender ?? null,
+    );
+
+  const [isPublic, setIsPublic] = useState(
+    user.profileVisibility === "public",
+  );
+
+  const [previewing, setPreviewing] =
+    useState(false);
+
+  const [photo, setPhoto] =
+    useState<ProfilePhotoChange | null>(null);
+
+  const [choosing, setChoosing] =
+    useState(false);
+
+  const alive = useRef(true);
+  const picking = useRef(false);
+
   useEffect(() => {
     alive.current = true;
+
     return () => {
       alive.current = false;
     };
@@ -729,116 +1326,200 @@ function EditProfile({
 
   async function choosePhoto() {
     if (picking.current || saving) return;
+
     picking.current = true;
     setChoosing(true);
     setError("");
+
     try {
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ["images"],
-        allowsEditing: true,
-        aspect: [1, 1],
-        quality: 1,
-        exif: false,
-      });
+      const result =
+        await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ["images"],
+          allowsEditing: true,
+          aspect: [1, 1],
+          quality: 1,
+          exif: false,
+        });
+
       if (
         result.canceled ||
         !alive.current ||
         auth.currentUser?.uid !== user.id
-      )
+      ) {
         return;
+      }
+
       const asset = result.assets[0];
-      if (!asset?.width || !asset.height)
-        throw Error("Please choose a different photo.");
-      const side = Math.min(asset.width, asset.height);
-      const context = ImageManipulator.manipulate(asset.uri);
+
+      if (!asset?.width || !asset.height) {
+        throw Error(
+          "Please choose a different photo.",
+        );
+      }
+
+      const side = Math.min(
+        asset.width,
+        asset.height,
+      );
+
+      const context =
+        ImageManipulator.manipulate(asset.uri);
+
       context.crop({
-        originX: Math.floor((asset.width - side) / 2),
-        originY: Math.floor((asset.height - side) / 2),
+        originX: Math.floor(
+          (asset.width - side) / 2,
+        ),
+        originY: Math.floor(
+          (asset.height - side) / 2,
+        ),
         width: side,
         height: side,
       });
-      context.resize({ width: 512, height: 512 });
-      const rendered = await context.renderAsync();
+
+      context.resize({
+        width: 512,
+        height: 512,
+      });
+
+      const rendered =
+        await context.renderAsync();
+
       let image = await rendered.saveAsync({
         format: SaveFormat.JPEG,
         compress: 0.65,
         base64: true,
       });
-      if ((image.base64?.length || 0) > 273068)
+
+      if (
+        (image.base64?.length || 0) > 273068
+      ) {
         image = await rendered.saveAsync({
           format: SaveFormat.JPEG,
           compress: 0.4,
           base64: true,
         });
-      if (!image.base64 || image.base64.length > 273068)
-        throw Error("This photo is too large. Please choose another.");
-      if (alive.current && auth.currentUser?.uid === user.id)
+      }
+
+      if (
+        !image.base64 ||
+        image.base64.length > 273068
+      ) {
+        throw Error(
+          "This photo is too large. Please choose another.",
+        );
+      }
+
+      if (
+        alive.current &&
+        auth.currentUser?.uid === user.id
+      ) {
         setPhoto({
           kind: "upload",
           jpeg: image.base64,
-          requestId: `photo-${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`,
+          requestId:
+            `photo-${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`,
         });
-    } catch (e) {
-      if (alive.current)
+      }
+    } catch (error) {
+      if (alive.current) {
         setError(
-          e instanceof Error
-            ? e.message
+          error instanceof Error
+            ? error.message
             : "Could not open your photos. Please try again.",
         );
+      }
     } finally {
       picking.current = false;
-      if (alive.current) setChoosing(false);
+
+      if (alive.current) {
+        setChoosing(false);
+      }
     }
   }
 
   async function save() {
-    if (saveLock.current) return;
-    if (choosing) return;
+    if (saveLock.current || choosing) return;
+
     setError("");
-    if (fullName.trim().length < 2 || fullName.trim().length > 80) {
-      setError("Use a name between 2 and 80 characters.");
+
+    if (
+      fullName.trim().length < 2 ||
+      fullName.trim().length > 80
+    ) {
+      setError(
+        "Use a name between 2 and 80 characters.",
+      );
       return;
     }
+
     const resolved = resolveArea(location);
+
     if (!resolved || !location) {
-      setLocationError("Choose your city or town to continue.");
+      setLocationError(
+        "Choose your city or town to continue.",
+      );
       return;
     }
-    const ageValue = age.trim() === "" ? null : Number(age);
+
+    const ageValue =
+      age.trim() === "" ? null : Number(age);
+
     if (
       ageValue !== null &&
-      (!/^\d{1,3}$/.test(age.trim()) ||
+      (
+        !/^\d{1,3}$/.test(age.trim()) ||
         !Number.isInteger(ageValue) ||
         ageValue < 1 ||
-        ageValue > 120)
+        ageValue > 120
+      )
     ) {
-      setError("Choose an age from 1 to 120, or choose Not set.");
+      setError(
+        "Choose an age from 1 to 120, or choose Not set.",
+      );
       return;
     }
-    if (auth.currentUser?.uid !== user.id) {
-      setError("Your account changed. Please open your profile again.");
+
+    if (
+      auth.currentUser?.uid !== user.id
+    ) {
+      setError(
+        "Your account changed. Please open your profile again.",
+      );
       return;
     }
+
     saveLock.current = true;
     setSaving(true);
+
     try {
       const result = await updateProfile({
         fullName,
-        area: [resolved.district, resolved.city].filter(Boolean).join(", "),
+        area: [
+          resolved.district,
+          resolved.city,
+        ].filter(Boolean).join(", "),
         interests: user.interests,
         location,
         aboutMe,
         age: ageValue,
-        profileVisibility: isPublic ? "public" : "private",
+        gender: gender ?? null,
+        profileVisibility:
+          isPublic ? "public" : "private",
       });
+
       if (!alive.current) return;
+
       if (!result.ok) {
         setError(result.message);
         return;
       }
+
       if (photo) {
-        const changed = await changeProfilePhoto(photo);
+        const changed =
+          await changeProfilePhoto(photo);
+
         if (!alive.current) return;
+
         if (!changed.ok) {
           setError(
             `Your profile details were saved, but the photo change did not finish. ${changed.message}`,
@@ -846,21 +1527,37 @@ function EditProfile({
           return;
         }
       }
-      if (alive.current) onClose();
+
+      if (alive.current) {
+        onClose();
+      }
     } catch {
-      if (alive.current)
-        setError("Could not finish saving your profile. Please try again.");
+      if (alive.current) {
+        setError(
+          "Could not finish saving your profile. Please try again.",
+        );
+      }
     } finally {
       saveLock.current = false;
-      if (alive.current) setSaving(false);
+
+      if (alive.current) {
+        setSaving(false);
+      }
     }
   }
 
   return (
-    <SafeAreaView style={styles.container} edges={["top"]}>
+    <SafeAreaView
+      style={styles.container}
+      edges={["top"]}
+    >
       <KeyboardAvoidingView
         style={styles.flex}
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        behavior={
+          Platform.OS === "ios"
+            ? "padding"
+            : "height"
+        }
       >
         <ScrollView
           contentContainerStyle={styles.content}
@@ -873,11 +1570,18 @@ function EditProfile({
             disabled={saving || choosing}
             style={styles.backButton}
           >
-            <Text style={styles.accentText}>← Back to profile</Text>
+            <Text style={styles.accentText}>
+              ← Back to profile
+            </Text>
           </Pressable>
-          <Text accessibilityRole="header" style={styles.editTitle}>
+
+          <Text
+            accessibilityRole="header"
+            style={styles.editTitle}
+          >
             Edit profile
           </Text>
+
           <Text style={styles.editSubtitle}>
             Make your profile feel like you.
           </Text>
@@ -893,25 +1597,42 @@ function EditProfile({
                     : undefined
               }
             />
+
             <Pressable
               accessibilityRole="button"
               disabled={saving || choosing}
-              onPress={() => void choosePhoto()}
+              onPress={() =>
+                void choosePhoto()
+              }
               style={styles.outlineButton}
             >
-              <Text style={styles.outlineButtonText}>
-                {choosing ? "Preparing photo…" : "Choose photo"}
+              <Text
+                style={styles.outlineButtonText}
+              >
+                {choosing
+                  ? "Preparing photo…"
+                  : "Choose photo"}
               </Text>
             </Pressable>
-            {(user.photoVersion || photo?.kind === "upload") &&
+
+            {(user.photoVersion ||
+              photo?.kind === "upload") &&
               photo?.kind !== "remove" && (
                 <Pressable
                   accessibilityRole="button"
                   disabled={saving || choosing}
-                  onPress={() => setPhoto({ kind: "remove" })}
+                  onPress={() =>
+                    setPhoto({
+                      kind: "remove",
+                    })
+                  }
                   style={styles.backButton}
                 >
-                  <Text style={styles.accentText}>Remove photo</Text>
+                  <Text
+                    style={styles.accentText}
+                  >
+                    Remove photo
+                  </Text>
                 </Pressable>
               )}
           </View>
@@ -925,8 +1646,12 @@ function EditProfile({
                 setError("");
               }}
               disabled={saving}
-              inputProps={{ autoCapitalize: "words", autoComplete: "name" }}
+              inputProps={{
+                autoCapitalize: "words",
+                autoComplete: "name",
+              }}
             />
+
             <AreaField
               value={location}
               error={locationError}
@@ -937,16 +1662,51 @@ function EditProfile({
                 setError("");
               }}
             />
-            <AgeDropdown
-              value={age}
-              onChange={(value) => {
-                setAge(value);
-                setError("");
+
+            <View
+              style={{
+                flexDirection: "row",
+                gap: 12,
               }}
-              disabled={saving}
-            />
+            >
+              <View
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                }}
+              >
+                <AgeDropdown
+                  value={age}
+                  onChange={(value) => {
+                    setAge(value);
+                    setError("");
+                  }}
+                  disabled={saving}
+                />
+              </View>
+
+              <View
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                }}
+              >
+                <GenderDropdown
+                  value={gender}
+                  onChange={(value) => {
+                    setGender(value);
+                    setError("");
+                  }}
+                  disabled={saving}
+                />
+              </View>
+            </View>
+
             <View style={styles.section}>
-              <Text style={styles.menuTitle}>About me</Text>
+              <Text style={styles.menuTitle}>
+                About me
+              </Text>
+
               <TextInput
                 accessibilityLabel="About me"
                 multiline
@@ -960,34 +1720,51 @@ function EditProfile({
                 style={styles.aboutInput}
               />
             </View>
+
             <View style={styles.detailCard}>
-              <View style={styles.visibilityHeading}>
-                <Text style={styles.menuTitle}>Public profile</Text>
+              <View
+                style={styles.visibilityHeading}
+              >
+                <Text
+                  style={styles.menuTitle}
+                >
+                  Public profile
+                </Text>
+
                 <Switch
                   accessibilityLabel="Public profile"
                   value={isPublic}
                   disabled={saving}
                   onValueChange={setIsPublic}
-                  trackColor={{ false: colors.border, true: colors.accent }}
+                  trackColor={{
+                    false: colors.border,
+                    true: colors.accent,
+                  }}
                   thumbColor={colors.surface}
                   ios_backgroundColor={colors.border}
                 />
               </View>
+
               <Text style={styles.description}>
                 {isPublic
-                  ? "Other signed-in members can see your photo, About me, age and area. Your email stays private."
+                  ? "Other signed-in members can see your photo, About me, interests, age, gender and area. Your email stays private."
                   : "Only you can open your full profile. Your name and general area can still appear in member lists and chats."}
               </Text>
+
               <Pressable
                 accessibilityRole="button"
                 disabled={saving || choosing}
-                onPress={() => setPreviewing(true)}
+                onPress={() =>
+                  setPreviewing(true)
+                }
                 style={({ pressed }) => [
                   styles.outlineButton,
                   pressed && styles.pressed,
                 ]}
               >
-                <Text style={styles.outlineButtonText}>
+                <Text
+                  style={styles.outlineButtonText}
+                >
                   Preview saved profile
                 </Text>
               </Pressable>
@@ -997,15 +1774,23 @@ function EditProfile({
           {!!error && (
             <Text
               accessibilityRole="alert"
-              style={{ color: colors.text, fontSize: 16, lineHeight: 24 }}
+              style={{
+                color: colors.text,
+                fontSize: 16,
+                lineHeight: 24,
+              }}
             >
               {error}
             </Text>
           )}
+
           <Pressable
             accessibilityRole="button"
             onPress={save}
-            accessibilityState={{ disabled: saving || choosing, busy: saving }}
+            accessibilityState={{
+              disabled: saving || choosing,
+              busy: saving,
+            }}
             disabled={saving || choosing}
             style={({ pressed }) => [
               styles.primaryButton,
@@ -1014,29 +1799,45 @@ function EditProfile({
             ]}
           >
             {saving ? (
-              <ActivityIndicator color={colors.background} />
+              <ActivityIndicator
+                color={colors.background}
+              />
             ) : (
-              <Text style={styles.primaryButtonText}>Save profile</Text>
+              <Text
+                style={styles.primaryButtonText}
+              >
+                Save profile
+              </Text>
             )}
           </Pressable>
+
           <Pressable
             accessibilityRole="button"
             onPress={onClose}
             disabled={saving || choosing}
             style={styles.cancelButton}
           >
-            <Text style={styles.outlineButtonText}>Cancel</Text>
+            <Text
+              style={styles.outlineButtonText}
+            >
+              Cancel
+            </Text>
           </Pressable>
         </ScrollView>
       </KeyboardAvoidingView>
+
       <Modal
         visible={previewing}
         animationType="slide"
-        onRequestClose={() => setPreviewing(false)}
+        onRequestClose={() =>
+          setPreviewing(false)
+        }
       >
         <ProfilePreview
           user={user}
-          onClose={() => setPreviewing(false)}
+          onClose={() =>
+            setPreviewing(false)
+          }
           backLabel="← Back to Edit profile"
         />
       </Modal>
@@ -1046,16 +1847,27 @@ function EditProfile({
 
 function getInitials(name: string) {
   const parts = name.trim().split(/\s+/);
-  const first = Array.from(parts[0] || "")[0] || "";
+
+  const first =
+    Array.from(parts[0] || "")[0] || "";
+
   const last =
-    parts.length > 1 ? Array.from(parts[parts.length - 1]!)[0] || "" : "";
+    parts.length > 1
+      ? Array.from(
+          parts[parts.length - 1]!,
+        )[0] || ""
+      : "";
+
   return `${first}${last}`.toUpperCase();
 }
 
 function createStyles(colors: AppColors) {
   return StyleSheet.create({
     flex: { flex: 1 },
-    container: { flex: 1, backgroundColor: colors.background },
+    container: {
+      flex: 1,
+      backgroundColor: colors.background,
+    },
     content: {
       width: "100%",
       maxWidth: 640,
@@ -1064,8 +1876,14 @@ function createStyles(colors: AppColors) {
       paddingBottom: 36,
       gap: 20,
     },
-    signedInContent: { flexGrow: 1 },
-    pageTitle: { color: colors.text, fontSize: 28, fontWeight: "700" },
+    signedInContent: {
+      flexGrow: 1,
+    },
+    pageTitle: {
+      color: colors.text,
+      fontSize: 28,
+      fontWeight: "700",
+    },
     brandRow: {
       flexDirection: "row",
       flexWrap: "wrap",
@@ -1088,7 +1906,11 @@ function createStyles(colors: AppColors) {
       alignItems: "center",
       justifyContent: "center",
     },
-    logoText: { color: colors.background, fontSize: 24, fontWeight: "800" },
+    logoText: {
+      color: colors.background,
+      fontSize: 24,
+      fontWeight: "800",
+    },
     brandText: {
       color: colors.text,
       fontSize: 22,
@@ -1104,7 +1926,11 @@ function createStyles(colors: AppColors) {
       gap: 8,
       borderRadius: 12,
     },
-    settingsText: { color: colors.accent, fontSize: 16, fontWeight: "600" },
+    settingsText: {
+      color: colors.accent,
+      fontSize: 16,
+      fontWeight: "600",
+    },
     welcomeCard: {
       padding: 22,
       backgroundColor: colors.surface,
@@ -1145,7 +1971,11 @@ function createStyles(colors: AppColors) {
       transform: [{ rotate: "12deg" }],
       marginLeft: -8,
     },
-    artAvatarText: { color: colors.text, fontSize: 27, fontWeight: "700" },
+    artAvatarText: {
+      color: colors.text,
+      fontSize: 27,
+      fontWeight: "700",
+    },
     welcomeTitle: {
       color: colors.text,
       fontSize: 29,
@@ -1158,7 +1988,10 @@ function createStyles(colors: AppColors) {
       lineHeight: 25,
       textAlign: "center",
     },
-    welcomeActions: { gap: 12, marginTop: 8 },
+    welcomeActions: {
+      gap: 12,
+      marginTop: 8,
+    },
     primaryButton: {
       minHeight: 58,
       borderRadius: 14,
@@ -1188,21 +2021,88 @@ function createStyles(colors: AppColors) {
       fontWeight: "600",
       textAlign: "center",
     },
-    section: { gap: 12 },
-    sectionTitle: { color: colors.text, fontSize: 20, fontWeight: "700" },
-    benefits: { gap: 14, paddingHorizontal: 2 },
-    benefit: { color: colors.muted, fontSize: 16, lineHeight: 24 },
+    section: {
+      gap: 12,
+    },
+    sectionTitle: {
+      color: colors.text,
+      fontSize: 20,
+      fontWeight: "700",
+    },
+    benefits: {
+      gap: 14,
+      paddingHorizontal: 2,
+    },
+    benefit: {
+      color: colors.muted,
+      fontSize: 16,
+      lineHeight: 24,
+    },
     profileCard: {
       backgroundColor: colors.surface,
       borderRadius: 20,
       borderWidth: 1,
       borderColor: colors.border,
       padding: 20,
-      gap: 20,
+      gap: 12,
     },
-    profileIdentity: { flexDirection: "row", alignItems: "center", gap: 16 },
-    profileCopy: { flex: 1, gap: 6 },
-    email: { color: colors.muted, fontSize: 16, lineHeight: 23 },
+    profileIdentity: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 16,
+    },
+    profileCopy: {
+      flex: 1,
+      gap: 6,
+    },
+    profileMeta: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      alignItems: "baseline",
+      columnGap: 10,
+      rowGap: 0,
+    },
+    profileMetaText: {
+      color: colors.muted,
+      fontSize: 16,
+      lineHeight: 22,
+      flexShrink: 1,
+    },
+    editProfileButton: {
+      width: "50%",
+      alignSelf: "flex-start",
+      minHeight: 44,
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+      borderRadius: 12,
+    },
+    editProfileButtonText: {
+      color: colors.background,
+      fontSize: 16,
+      fontWeight: "700",
+    },
+    interestWrap: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      gap: 8,
+    },
+    interestChip: {
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: 18,
+      paddingHorizontal: 12,
+      paddingVertical: 7,
+    },
+    interestText: {
+      color: colors.text,
+      fontSize: 15,
+      lineHeight: 21,
+    },
+    email: {
+      color: colors.muted,
+      fontSize: 16,
+      lineHeight: 23,
+    },
     detailCard: {
       backgroundColor: colors.surface,
       borderColor: colors.border,
@@ -1211,7 +2111,11 @@ function createStyles(colors: AppColors) {
       padding: 20,
       gap: 14,
     },
-    description: { color: colors.muted, fontSize: 17, lineHeight: 25 },
+    description: {
+      color: colors.muted,
+      fontSize: 17,
+      lineHeight: 25,
+    },
     visibilityHeading: {
       flexDirection: "row",
       flexWrap: "wrap",
@@ -1231,7 +2135,11 @@ function createStyles(colors: AppColors) {
       justifyContent: "space-between",
       gap: 12,
     },
-    agePlaceholder: { color: colors.muted, fontSize: 17, lineHeight: 24 },
+    agePlaceholder: {
+      color: colors.muted,
+      fontSize: 17,
+      lineHeight: 24,
+    },
     ageOverlay: {
       flex: 1,
       backgroundColor: "rgba(0, 0, 0, 0.6)",
@@ -1268,7 +2176,10 @@ function createStyles(colors: AppColors) {
       alignItems: "center",
       paddingHorizontal: 8,
     },
-    ageList: { maxHeight: 320, flexShrink: 1 },
+    ageList: {
+      maxHeight: 320,
+      flexShrink: 1,
+    },
     ageOption: {
       flexDirection: "row",
       alignItems: "center",
@@ -1277,16 +2188,29 @@ function createStyles(colors: AppColors) {
       paddingHorizontal: 16,
       borderRadius: 10,
     },
-    ageOptionSelected: { backgroundColor: colors.accent },
-    ageOptionText: { color: colors.text, fontSize: 18, lineHeight: 24 },
+    ageOptionSelected: {
+      backgroundColor: colors.accent,
+    },
+    ageOptionText: {
+      color: colors.text,
+      fontSize: 18,
+      lineHeight: 24,
+    },
     ageSelectedText: {
       color: colors.background,
       fontSize: 18,
       fontWeight: "700",
       lineHeight: 24,
     },
-    avatarImage: { width: "100%", height: "100%", borderRadius: 32 },
-    photoEditor: { alignItems: "center", gap: 12 },
+    avatarImage: {
+      width: "100%",
+      height: "100%",
+      borderRadius: 32,
+    },
+    photoEditor: {
+      alignItems: "center",
+      gap: 12,
+    },
     aboutInput: {
       minHeight: 150,
       borderWidth: 1,
@@ -1306,14 +2230,26 @@ function createStyles(colors: AppColors) {
       alignItems: "center",
       justifyContent: "center",
     },
-    avatarText: { color: colors.background, fontSize: 26, fontWeight: "700" },
+    avatarText: {
+      color: colors.background,
+      fontSize: 26,
+      fontWeight: "700",
+    },
     name: {
       color: colors.text,
       fontSize: 24,
       fontWeight: "700",
     },
-    subtitle: { color: colors.muted, fontSize: 17, lineHeight: 24 },
-    accentText: { color: colors.accent, fontSize: 17, fontWeight: "600" },
+    subtitle: {
+      color: colors.muted,
+      fontSize: 17,
+      lineHeight: 24,
+    },
+    accentText: {
+      color: colors.accent,
+      fontSize: 17,
+      fontWeight: "600",
+    },
     menu: {
       borderRadius: 18,
       borderWidth: 1,
@@ -1328,11 +2264,28 @@ function createStyles(colors: AppColors) {
       gap: 12,
       padding: 16,
     },
-    menuBorder: { borderBottomWidth: 1, borderBottomColor: colors.border },
-    menuCopy: { flex: 1, gap: 4 },
-    menuTitle: { color: colors.text, fontSize: 17, fontWeight: "600" },
-    menuDetail: { color: colors.muted, fontSize: 14, lineHeight: 20 },
-    chevron: { color: colors.muted, fontSize: 26 },
+    menuBorder: {
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+    },
+    menuCopy: {
+      flex: 1,
+      gap: 4,
+    },
+    menuTitle: {
+      color: colors.text,
+      fontSize: 17,
+      fontWeight: "600",
+    },
+    menuDetail: {
+      color: colors.muted,
+      fontSize: 14,
+      lineHeight: 20,
+    },
+    chevron: {
+      color: colors.muted,
+      fontSize: 26,
+    },
     themeRow: {
       minHeight: 76,
       flexDirection: "row",
@@ -1351,17 +2304,36 @@ function createStyles(colors: AppColors) {
       alignItems: "center",
       padding: 14,
     },
-    signOutText: { color: colors.accent, fontSize: 17, fontWeight: "700" },
-    accountFooter: { marginTop: "auto", paddingTop: 12 },
-    pressed: { opacity: 0.75 },
+    signOutText: {
+      color: colors.accent,
+      fontSize: 17,
+      fontWeight: "700",
+    },
+    accountFooter: {
+      marginTop: "auto",
+      paddingTop: 12,
+    },
+    pressed: {
+      opacity: 0.75,
+    },
     backButton: {
       minHeight: 48,
       justifyContent: "center",
       alignSelf: "flex-start",
     },
-    editTitle: { color: colors.text, fontSize: 30, fontWeight: "700" },
-    editSubtitle: { color: colors.muted, fontSize: 17, lineHeight: 25 },
-    editFields: { gap: 20 },
+    editTitle: {
+      color: colors.text,
+      fontSize: 30,
+      fontWeight: "700",
+    },
+    editSubtitle: {
+      color: colors.muted,
+      fontSize: 17,
+      lineHeight: 25,
+    },
+    editFields: {
+      gap: 20,
+    },
     cancelButton: {
       minHeight: 48,
       justifyContent: "center",
