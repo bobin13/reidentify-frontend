@@ -1,6 +1,7 @@
-const { createHash } = require("node:crypto");
+const { createHash, randomUUID } = require("node:crypto");
 const { Timestamp, FieldPath } = require("firebase-admin/firestore");
 const { mapCellFor } = require("./map-geography");
+const { groupEventScope } = require("./group-event-access");
 
 const ALLOWED_INTERESTS = new Set([
   "Walking",
@@ -299,6 +300,63 @@ function installGroupRoutes(app, db, { clock = Date.now } = {}) {
     if (!validId(id)) fail(400, "Invalid group.");
     return groups.doc(id);
   }
+
+  // One ledger per account serializes saves made in different groups. Seed it
+  // from existing events once, then read only its still-active event records.
+  async function reserveEventSlot(tx, uid, reference, old, now) {
+    const ledgerRef = db.collection("groupEventLimits").doc(hash(uid));
+    const ledger = await tx.get(ledgerRef);
+    let saved;
+    if (!ledger.exists || ledger.data().schemaVersion !== 1) {
+      saved = (await tx.get(events.where("creatorId", "==", uid))).docs;
+    } else {
+      const ids = ledger.data().eventIds;
+      if (!Array.isArray(ids) || ids.some((id) => !validId(id)))
+        fail(503, "Your event limit could not be checked. Please try again.");
+      saved = await Promise.all(
+        [...new Set(ids)].map((id) =>
+          id === reference.id ? old : tx.get(events.doc(id)),
+        ),
+      );
+    }
+    const active = new Set(
+      saved
+        .filter((doc) => {
+          if (!doc.exists) return false;
+          const event = doc.data();
+          return (
+            event.creatorId === uid &&
+            event.status === "published" &&
+            milliseconds(event.endsAt) > now
+          );
+        })
+        .map((doc) => doc.id),
+    );
+    const existingActive =
+      old.exists &&
+      old.data().creatorId === uid &&
+      old.data().status === "published" &&
+      milliseconds(old.data().endsAt) > now;
+    if (!existingActive && active.size >= 2)
+      fail(
+        409,
+        "You can have up to 2 upcoming or ongoing events across all your groups. Cancel an event or wait for one to finish before creating another.",
+      );
+    active.add(reference.id);
+    return {
+      ref: ledgerRef,
+      data: { schemaVersion: 1, eventIds: [...active].sort() },
+    };
+  }
+
+  app.get(
+    "/api/map/group-version",
+    route(async (req, res) => {
+      const scope = await groupEventScope(db, req.account?.uid);
+      res.set("Cache-Control", "no-store");
+      res.json({ version: scope.key, membership: scope.membershipKey });
+    }),
+  );
   async function access(id, uid, tx) {
     const reference = ref(id),
       memberRef = membershipRef(db, id, uid);
@@ -965,6 +1023,13 @@ function installGroupRoutes(app, db, { clock = Date.now } = {}) {
           fail(400, "Choose a future start time for a new event.");
         if (old.exists && old.data().creatorId !== req.account.uid)
           fail(403, "You can change only your own events.");
+        const slot = await reserveEventSlot(
+          tx,
+          req.account.uid,
+          reference,
+          old,
+          clock(),
+        );
         const data = {
           title,
           location,
@@ -989,7 +1054,11 @@ function installGroupRoutes(app, db, { clock = Date.now } = {}) {
           ),
         );
         tx.set(reference, data);
-        tx.update(v.ref, activityPatch(v.group, clock(), latestEnd));
+        tx.set(slot.ref, slot.data);
+        tx.update(v.ref, {
+          ...activityPatch(v.group, clock(), latestEnd),
+          eventRevision: randomUUID(),
+        });
       });
       res.json({ saved: true });
     }),
@@ -1012,9 +1081,8 @@ function installGroupRoutes(app, db, { clock = Date.now } = {}) {
         if (old.data().creatorId !== req.account.uid)
           fail(403, "You can cancel only your own events.");
         tx.update(reference, { status: "cancelled" });
-        tx.update(
-          v.ref,
-          activityPatch(
+        tx.update(v.ref, {
+          ...activityPatch(
             v.group,
             clock(),
             futureEnd(
@@ -1022,7 +1090,8 @@ function installGroupRoutes(app, db, { clock = Date.now } = {}) {
               clock(),
             ),
           ),
-        );
+          eventRevision: randomUUID(),
+        });
       });
       res.json({ cancelled: true });
     }),

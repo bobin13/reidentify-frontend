@@ -15,7 +15,8 @@ async function groupEventScope(db, uid) {
   const candidates = [
     ...new Set(mine.docs.map((doc) => doc.data().groupId).filter(validId)),
   ].sort();
-  const ids = [];
+  const ids = [],
+    revisions = [];
   // Closed/deleting groups and orphaned memberships must not expose events.
   for (let i = 0; i < candidates.length; i += 8) {
     const docs = await Promise.all(
@@ -24,16 +25,22 @@ async function groupEventScope(db, uid) {
         .map((id) => db.collection("groups").doc(id).get()),
     );
     docs.forEach((doc, n) => {
-      if (doc.exists && doc.data().status === "active")
+      if (doc.exists && doc.data().status === "active") {
         ids.push(candidates[i + n]);
+        revisions.push([candidates[i + n], doc.data().eventRevision || ""]);
+      }
     });
   }
   const allowed = new Set(ids);
   return {
     uid,
     ids,
-    key: createHash("sha256")
+    membershipKey: createHash("sha256")
       .update(JSON.stringify([uid, ids]))
+      .digest("hex")
+      .slice(0, 24),
+    key: createHash("sha256")
+      .update(JSON.stringify([uid, revisions]))
       .digest("hex")
       .slice(0, 24),
     allows(event) {

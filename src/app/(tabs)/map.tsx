@@ -163,7 +163,13 @@ export default function MapScreen() {
   const searchPending =
     loading || !queryReady || !canReuseMapArea(settledView.region, region);
   const queryKey = scope + "|" + queryString;
-  const completedView = useRef({ key: "", at: 0, reload: -1 });
+  const completedView = useRef({
+    key: "",
+    at: 0,
+    reload: -1,
+    groupVersion: "",
+  });
+  const checkedMembership = useRef<{ uid: string; key: string } | null>(null);
   const viewportFlight = useRef<Promise<ViewPage> | null>(null);
   const [records, setRecords] = useState<{
     scope: string;
@@ -308,7 +314,12 @@ export default function MapScreen() {
       "reidentify:group-map-changed",
       (owner: string) => {
         if (owner !== uid) return;
-        completedView.current = { key: "", at: 0, reload: -1 };
+        completedView.current = {
+          key: "",
+          at: 0,
+          reload: -1,
+          groupVersion: "",
+        };
         scheduleCache.clear();
         setSelectedId(null);
         setRecords({
@@ -362,19 +373,7 @@ export default function MapScreen() {
           queued = true;
           return;
         }
-        const saved = completedView.current;
-        if (
-          saved.key === queryKey &&
-          saved.reload === reload &&
-          Date.now() - saved.at < 180000
-        ) {
-          setLoading(false);
-          return;
-        }
         busy = true;
-        setLoading(true);
-        setError("");
-        setClock(Date.now());
         const merged = new Map<string, ViewVenue>();
         const seenCursors = new Set<string>();
         let cursor: string | null = null,
@@ -384,6 +383,59 @@ export default function MapScreen() {
           const account = auth.currentUser;
           if (!account || account.uid !== uid)
             throw new Error("Please sign in again.");
+          // Local device notifications cannot reach another member's phone.
+          // Check small group revisions before reusing the completed map.
+          const groupVersion = await apiRequest<{
+            version: string;
+            membership: string;
+          }>(account, "GET", undefined, "/api/map/group-version");
+          if (
+            !active ||
+            auth.currentUser?.uid !== uid ||
+            (AppState.currentState && AppState.currentState !== "active")
+          )
+            return;
+          if (
+            typeof groupVersion.version !== "string" ||
+            typeof groupVersion.membership !== "string"
+          )
+            throw new Error(
+              "Could not check group event updates. Tap Refresh.",
+            );
+          const previousMembership = checkedMembership.current;
+          checkedMembership.current = { uid, key: groupVersion.membership };
+          if (
+            previousMembership?.uid === uid &&
+            previousMembership.key !== groupVersion.membership
+          ) {
+            scheduleCache.clear();
+            setSelectedId(null);
+            setPicked(null);
+            setRecords({
+              scope: "",
+              query: "",
+              data: {
+                venues: [],
+                windowDays: 31,
+                nextCursor: null,
+              },
+            });
+          }
+          const saved = completedView.current;
+          if (
+            saved.key === queryKey &&
+            saved.reload === reload &&
+            saved.groupVersion === groupVersion.version &&
+            Date.now() - saved.at < 180000
+          ) {
+            setError("");
+            return;
+          }
+          if (saved.groupVersion !== groupVersion.version)
+            scheduleCache.clear();
+          setLoading(true);
+          setError("");
+          setClock(Date.now());
           do {
             if (!active || auth.currentUser?.uid !== uid) return;
             if (AppState.currentState && AppState.currentState !== "active")
@@ -489,7 +541,12 @@ export default function MapScreen() {
               );
           } while (cursor && active);
           if (active && cursor === null)
-            completedView.current = { key: queryKey, at: Date.now(), reload };
+            completedView.current = {
+              key: queryKey,
+              at: Date.now(),
+              reload,
+              groupVersion: groupVersion.version,
+            };
         } catch (issue) {
           if (active)
             setError(
@@ -509,16 +566,14 @@ export default function MapScreen() {
           }
         }
       }
-      // Reuse completed, recent results on tab return. New views, expired
-      // results and the Refresh button still load all pages automatically.
+      // Check when this view opens, its area changes, or Refresh is tapped.
+      // Cache expiry is checked on the next action; it schedules no requests.
       void refresh();
-      const timer = setInterval(() => void refresh(), 180000);
       const subscription = AppState.addEventListener("change", (state) => {
         if (state === "active") void refresh();
       });
       return () => {
         active = false;
-        clearInterval(timer);
         subscription.remove();
       };
     }, [uid, queryKey, queryString, reload, scope, queryReady]),
