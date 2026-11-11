@@ -1,6 +1,10 @@
+const path = require("node:path");
+require("dotenv").config({
+  path: path.resolve(__dirname, "../.env"),
+  quiet: true,
+});
 const { installNewsRoutes } = require("./news-routes");
 const { installGroupRoutes, startGroupCleanup } = require("./groups-routes");
-require("dotenv").config();
 const { installEventRoutes } = require("./events-routes");
 const { startExternalEventSync } = require("./external-events");
 const { installMessagingRoutes } = require("./messages-routes");
@@ -8,8 +12,8 @@ const express = require("express");
 const { existsSync } = require("node:fs");
 const { initializeApp, applicationDefault } = require("firebase-admin/app");
 const { getAuth } = require("firebase-admin/auth");
-const { getFirestore } = require("firebase-admin/firestore");
 const { cities } = require("../shared/ontario-areas.json");
+const { closePool, ensureUser, getPool } = require("./postgres");
 const cityIndex = new Map(cities.map((city) => [city.id, city]));
 const { installPlaceRoutes } = require("./places-routes");
 const {
@@ -82,15 +86,19 @@ function locationArea(location) {
 }
 
 function ownerProfile(account, data) {
-  const location = resolveLocation(data.location) || legacyLocation(data.area);
+  const location =
+    resolveLocation({
+      cityId: data.city_id,
+      districtId: data.district_id,
+    }) || legacyLocation(data.area);
   return {
     id: account.uid,
-    email: account.email || "",
-    fullName: data.fullName,
+      email: data.email || account.email || "",
+    fullName: data.full_name,
     area: location ? locationArea(location) : data.area || "",
     location,
     interests: data.interests || [],
-    joinedAt: data.joinedAt,
+    joinedAt: data.joined_at,
     ...profileExtras(data),
   };
 }
@@ -106,11 +114,14 @@ function createApp({ db, firebaseAuth }) {
     return json(req, res, next);
   });
 
-  app.get("/health", (_req, res) => {
-    res.json({
-      status: "ok",
-      database: "connected",
-    });
+  app.get("/health", async (_req, res) => {
+    try {
+      await db.query("SELECT 1");
+      res.json({ status: "ok", database: "connected" });
+    } catch (error) {
+      console.error("PostgreSQL health check failed:", error.code || error.message);
+      res.status(503).json({ status: "error", database: "unavailable" });
+    }
   });
 
   // Every /api endpoint requires a valid Firebase login.
@@ -125,8 +136,6 @@ function createApp({ db, firebaseAuth }) {
 
     try {
       req.account = await firebaseAuth.verifyIdToken(match[1], true);
-
-      next();
     } catch (error) {
       const invalidTokenCodes = [
         "auth/argument-error",
@@ -151,20 +160,49 @@ function createApp({ db, firebaseAuth }) {
       res.status(503).json({
         message: "Unable to check your login. Try again.",
       });
+      return;
+    }
+
+    try {
+      req.userId = await ensureUser(db, req.account);
+      next();
+    } catch (error) {
+      console.error(
+        "PostgreSQL user lookup failed:",
+        error.code || error.message,
+      );
+      res.status(503).json({
+        message: "Unable to load your account. Try again.",
+      });
     }
   });
 
   // Read the signed-in user's profile.
   app.get("/api/me", async (req, res) => {
-    const snapshot = await db.collection("users").doc(req.account.uid).get();
-
-    if (!snapshot.exists) {
+    const result = await db.query(
+      `SELECT id, firebase_uid, full_name, email, area, city_id, city,
+              district_id, district, joined_at, about_me, gender,
+              age, profile_visibility, photo_version
+       FROM users WHERE id = $1`,
+      [req.userId],
+    );
+    if (!result.rowCount) {
       return res.status(404).json({
         message: "Profile not found.",
       });
     }
-
-    const data = snapshot.data();
+    const interests = await db.query(
+      `SELECT a.activity
+       FROM user_activities ua
+       JOIN activities a ON a.activity_id = ua.activity_id
+       WHERE ua.user_id = $1
+       ORDER BY a.groupid, a.activity`,
+      [req.userId],
+    );
+    const data = {
+      ...result.rows[0],
+      interests: interests.rows.map((row) => row.activity),
+    };
     res.json({
       user: ownerProfile(req.account, data),
     });
@@ -224,39 +262,116 @@ function createApp({ db, firebaseAuth }) {
     }
 
     // The ID comes from Firebase, never from the request body.
-    const reference = db.collection("users").doc(req.account.uid);
-
-    const user = await db.runTransaction(async (transaction) => {
-      const snapshot = await transaction.get(reference);
-      const previous = snapshot.exists ? snapshot.data() : {};
+    const user = await db.connect();
+    let profile;
+    try {
+      await user.query("BEGIN");
+      const previousResult = await user.query(
+        `SELECT id, area, city_id, city, district_id, district, joined_at,
+                about_me, age, gender, profile_visibility, photo_version
+         FROM users WHERE id = $1 FOR UPDATE`,
+        [req.userId],
+      );
+      const previous = previousResult.rows[0] || {};
       // Older Search screens send only area/interests. Keep their saved location.
       const location = changesLocation
         ? requestedLocation
-        : resolveLocation(previous.location) ||
-          legacyLocation(previous.area || area);
-      const selectedInterests = interests ?? previous.interests ?? [];
-
-      const profile = {
-        id: req.account.uid,
-        email: req.account.email || "",
-        fullName: fullName.trim(),
-        area: location
-          ? locationArea(location)
-          : (area ?? previous.area ?? "").trim(),
-        location,
-        interests: [...new Set(selectedInterests.map((item) => item.trim()))],
-        joinedAt: previous.joinedAt || new Date().toISOString(),
-        ...profileChanges(input, previous),
-      };
-
-      transaction.set(reference, profile, {
-        merge: true,
+        : resolveLocation({
+            cityId: previous.city_id,
+            districtId: previous.district_id,
+          }) || legacyLocation(previous.area || area);
+      const selectedInterests = [
+        ...new Set((interests ?? []).map((item) => item.trim())),
+      ];
+      const extras = profileChanges(input, {
+        aboutMe: previous.about_me,
+        age: previous.age,
+        gender: previous.gender,
+        profileVisibility: previous.profile_visibility,
       });
+      const profileArea = location
+        ? locationArea(location)
+        : (area ?? previous.area ?? "").trim();
 
-      return ownerProfile(req.account, { ...previous, ...profile });
-    });
+      await user.query(
+        `UPDATE users
+         SET full_name = $2, area = $3, city_id = $4, city = $5,
+             district_id = $6, district = $7, about_me = $8, age = $9,
+             gender = $10, profile_visibility = $11, updated_at = now()
+         WHERE id = $1`,
+        [
+          req.userId,
+          fullName.trim(),
+          profileArea,
+          location?.cityId ?? null,
+          location?.city ?? null,
+          location?.districtId ?? null,
+          location?.district ?? null,
+          extras.aboutMe,
+          extras.age,
+          extras.gender,
+          extras.profileVisibility,
+        ],
+      );
 
-    res.json({ user });
+      if (interests !== undefined) {
+        const catalog = await user.query(
+          `SELECT DISTINCT ON (activity) activity_id, activity
+           FROM activities WHERE activity = ANY($1::text[])
+           ORDER BY activity, groupid`,
+          [selectedInterests],
+        );
+        if (catalog.rowCount !== selectedInterests.length) {
+          throw Object.assign(
+            new Error("Choose interests from the available list."),
+            { status: 400 },
+          );
+        }
+        await user.query("DELETE FROM user_activities WHERE user_id = $1", [
+          req.userId,
+        ]);
+        if (catalog.rowCount) {
+          await user.query(
+            `INSERT INTO user_activities (user_id, activity_id)
+             SELECT $1, selected.activity_id
+             FROM unnest($2::bigint[]) AS selected(activity_id)
+             ON CONFLICT DO NOTHING`,
+            [req.userId, catalog.rows.map((row) => row.activity_id)],
+          );
+        }
+      }
+
+      const saved = await user.query(
+        `SELECT id, firebase_uid, full_name, email, area, city_id, city,
+                district_id, district, joined_at, about_me, gender,
+                age, profile_visibility, photo_version
+         FROM users WHERE id = $1`,
+        [req.userId],
+      );
+      const savedInterests = await user.query(
+        `SELECT a.activity
+         FROM user_activities ua
+         JOIN activities a ON a.activity_id = ua.activity_id
+         WHERE ua.user_id = $1
+         ORDER BY a.groupid, a.activity`,
+        [req.userId],
+      );
+      profile = ownerProfile(req.account, {
+        ...saved.rows[0],
+        interests: savedInterests.rows.map((row) => row.activity),
+      });
+      await user.query("COMMIT");
+    } catch (error) {
+      await user.query("ROLLBACK").catch(() => {});
+      if (error.status) {
+        return res.status(error.status).json({ message: error.message });
+      }
+      throw error;
+    } finally {
+      user.release();
+    }
+
+    res.json({ user: profile });
   });
 
   installProfileRoutes(app, db, { toOwner: ownerProfile });
@@ -318,11 +433,18 @@ function createApp({ db, firebaseAuth }) {
 }
 
 async function start() {
-  const credentialsPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  const configuredCredentialPath =
+    process.env.GOOGLE_APPLICATION_CREDENTIALS || "";
+  const credentialsPath = configuredCredentialPath
+    ? path.isAbsolute(configuredCredentialPath)
+      ? configuredCredentialPath
+      : path.resolve(__dirname, "..", configuredCredentialPath)
+    : "";
 
   if (!credentialsPath || !existsSync(credentialsPath)) {
     throw new Error("Check GOOGLE_APPLICATION_CREDENTIALS in your .env file.");
   }
+  process.env.GOOGLE_APPLICATION_CREDENTIALS = credentialsPath;
 
   if (!process.env.FIREBASE_PROJECT_ID) {
     throw new Error("Set FIREBASE_PROJECT_ID in your .env file.");
@@ -333,10 +455,21 @@ async function start() {
     projectId: process.env.FIREBASE_PROJECT_ID,
   });
 
-  const db = getFirestore();
-
-  // Check the real database connection before starting.
-  await db.collection("users").limit(1).get();
+  const db = getPool();
+  await db.query("SELECT 1");
+  const migrationTable = await db.query(
+    "SELECT to_regclass('public.schema_migrations') AS name",
+  );
+  if (!migrationTable.rows[0].name) {
+    throw new Error("Run `npm run db:migrate --prefix backend` before starting.");
+  }
+  const migration = await db.query(
+    "SELECT 1 FROM schema_migrations WHERE version = $1",
+    ["001_app_data_postgresql"],
+  );
+  if (!migration.rowCount) {
+    throw new Error("Run `npm run db:migrate --prefix backend` before starting.");
+  }
 
   const app = createApp({
     db,
@@ -346,7 +479,7 @@ async function start() {
   const port = Number(process.env.PORT || 3000);
 
   const server = app.listen(port, "127.0.0.1", () => {
-    console.log("Firestore connection OK");
+    console.log("PostgreSQL connection OK");
     console.log(`ReIdentify backend running at http://localhost:${port}`);
   });
 
@@ -354,6 +487,9 @@ async function start() {
   server.on("close", stopGroupCleanup);
   const stopExternalEvents = startExternalEventSync(db);
   server.on("close", stopExternalEvents);
+  server.on("close", () => {
+    void closePool();
+  });
 
   server.on("error", (error) => {
     console.error("Server could not listen:", error.message);

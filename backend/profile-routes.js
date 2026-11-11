@@ -1,10 +1,16 @@
 const express = require("express");
 const { createHash, randomUUID } = require("node:crypto");
+const { Buffer } = require("node:buffer");
 
 const MAX_PHOTO = 200 * 1024;
 
 const validId = (value) =>
   typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value);
+const validUuid = (value) =>
+  typeof value === "string" &&
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    value,
+  );
 
 const fail = (message, status = 400) =>
   Object.assign(new Error(message), { status });
@@ -27,10 +33,15 @@ const safeInterests = (data) =>
 const GENDERS = new Set(["Woman", "Man", "Non-binary"]);
 
 function profileExtras(data = {}) {
+  const aboutMe = data.aboutMe ?? data.about_me;
+  const gender = data.gender;
+  const profileVisibility = data.profileVisibility ?? data.profile_visibility;
+  const photoVersion = data.photoVersion ?? data.photo_version;
+
   return {
     aboutMe:
-      typeof data.aboutMe === "string"
-        ? data.aboutMe.slice(0, 1000)
+      typeof aboutMe === "string"
+        ? aboutMe.slice(0, 1000)
         : "",
 
     age:
@@ -38,14 +49,14 @@ function profileExtras(data = {}) {
         ? data.age
         : null,
 
-    gender: GENDERS.has(data.gender) ? data.gender : null,
+    gender: GENDERS.has(gender) ? gender : null,
 
     profileVisibility:
-      data.profileVisibility === "public" ? "public" : "private",
+      profileVisibility === "public" ? "public" : "private",
 
     photoVersion:
-      data.photoStorage === "firestore" && validId(data.photoVersion)
-        ? data.photoVersion
+      validId(photoVersion)
+        ? photoVersion
         : null,
   };
 }
@@ -187,31 +198,85 @@ function installProfileRoutes(app, db, { toOwner, now = Date.now } = {}) {
     usage.set(uid, entry);
   }
 
-  const owned = (uid) => db.collection("users").doc(uid);
-  const photoFor = (uid) => db.collection("profilePhotos").doc(uid);
+  const interestsSql = `ARRAY(
+    SELECT a.activity
+    FROM user_activities ua
+    JOIN activities a ON a.activity_id = ua.activity_id
+    WHERE ua.user_id = u.id
+    ORDER BY a.groupid, a.activity
+  )`;
 
-  async function allowed(viewer, uid) {
-    if (!validId(uid)) throw fail("Profile not found.", 404);
+  function profileData(row) {
+    return {
+      id: row.id,
+      fullName: row.full_name,
+      email: row.email || "",
+      area: row.area || "",
+      aboutMe: row.about_me || "",
+      gender: row.gender,
+      age: row.age,
+      profileVisibility: row.profile_visibility,
+      photoVersion: row.photo_version,
+      interests: row.interests || [],
+      joinedAt: row.joined_at,
+      location:
+        row.city_id == null
+          ? null
+          : {
+              cityId: row.city_id,
+              districtId: row.district_id,
+            },
+    };
+  }
 
-    const snapshot = await owned(uid).get();
-    const data = snapshot.exists ? snapshot.data() : null;
+  function owner(row) {
+    const data = profileData(row);
+    return toOwner
+      ? toOwner(
+          { uid: row.id, email: row.email || "" },
+          { ...row, interests: data.interests },
+        )
+      : {
+          id: row.id,
+          email: row.email || "",
+          fullName: row.full_name,
+          area: row.area || "",
+          interests: row.interests || [],
+          joinedAt: row.joined_at,
+          ...profileExtras(data),
+        };
+  }
 
+  async function profileById(id) {
+    const result = await db.query(
+      `SELECT u.*, COALESCE(${interestsSql}, ARRAY[]::text[]) AS interests
+       FROM users u
+       WHERE u.id = $1::uuid`,
+      [id],
+    );
+    return result.rows[0] || null;
+  }
+
+  async function allowed(viewer, id) {
+    if (!validUuid(id)) throw fail("Profile not found.", 404);
+    id = id.toLowerCase();
+    const row = await profileById(id);
     if (
-      !data ||
-      (viewer !== uid && profileExtras(data).profileVisibility !== "public")
+      !row ||
+      (viewer !== id && row.profile_visibility !== "public")
     ) {
       throw fail("Profile not found.", 404);
     }
-
-    return data;
+    return row;
   }
 
   const handle = (fn) => async (req, res, next) => {
     res.set("Cache-Control", "private, no-store");
 
-    if (!req.account?.uid) {
+    if (!req.account?.uid || !validUuid(req.userId)) {
       return res.status(401).json({ message: "Please sign in." });
     }
+    req.userId = req.userId.toLowerCase();
 
     try {
       await fn(req, res);
@@ -263,7 +328,7 @@ function installProfileRoutes(app, db, { toOwner, now = Date.now } = {}) {
           );
 
           if (
-            !validId(cursor.last) ||
+            !validUuid(cursor.last) ||
             cursor.key !== key ||
             !Number.isFinite(cursor.at) ||
             cursor.at > now() + 5000 ||
@@ -275,7 +340,7 @@ function installProfileRoutes(app, db, { toOwner, now = Date.now } = {}) {
           throw fail("This people search changed. Tap Refresh to start again.");
         }
 
-        after = cursor.last;
+        after = cursor.last.toLowerCase();
       }
 
       for (const [id, entry] of searches) {
@@ -303,36 +368,33 @@ function installProfileRoutes(app, db, { toOwner, now = Date.now } = {}) {
       searchTotal.count++;
       searches.set(req.account.uid, allowance);
 
-      let query = db
-        .collection("users")
-        .where("profileVisibility", "==", "public")
-        .orderBy("__name__")
-        .select("fullName", "area", "interests", "profileVisibility")
-        .limit(25);
-
-      if (after) query = query.startAfter(after);
-
-      const found = await query.get();
+      const found = await db.query(
+        `SELECT u.id, u.full_name, u.area,
+                COALESCE(${interestsSql}, ARRAY[]::text[]) AS interests
+         FROM users u
+         WHERE u.profile_visibility = 'public'
+           AND ($2::uuid IS NULL OR u.id > $2::uuid)
+         ORDER BY u.id
+         LIMIT 25`,
+        [req.userId, after || null],
+      );
       const words = queryText.split(" ").filter(Boolean);
       const people = [];
 
-      for (const doc of found.docs) {
-        const data = doc.data();
+      for (const row of found.rows) {
+        const interests = safeInterests({ interests: row.interests });
 
         if (
-          doc.id === req.account.uid ||
-          data.profileVisibility !== "public" ||
-          typeof data.fullName !== "string"
+          row.id === req.userId ||
+          typeof row.full_name !== "string"
         ) {
           continue;
         }
 
-        const interests = safeInterests(data);
-
         const text = normalizeSearch(
           [
-            data.fullName,
-            typeof data.area === "string" ? data.area : "",
+            row.full_name,
+            typeof row.area === "string" ? row.area : "",
             ...interests,
           ].join(" "),
         );
@@ -340,19 +402,19 @@ function installProfileRoutes(app, db, { toOwner, now = Date.now } = {}) {
         if (!words.every((word) => text.includes(word))) continue;
 
         people.push({
-          id: doc.id,
-          fullName: data.fullName,
-          area: typeof data.area === "string" ? data.area : "",
+          id: row.id,
+          fullName: row.full_name,
+          area: typeof row.area === "string" ? row.area : "",
           interests,
         });
       }
 
       const nextCursor =
-        found.docs.length === 25
+        found.rows.length === 25
           ? Buffer.from(
               JSON.stringify({
                 key,
-                last: found.docs.at(-1).id,
+                last: found.rows.at(-1).id,
                 at: now(),
               }),
             ).toString("base64url")
@@ -365,20 +427,20 @@ function installProfileRoutes(app, db, { toOwner, now = Date.now } = {}) {
   app.get(
     "/api/profiles/:uid",
     handle(async (req, res) => {
-      const data = await allowed(req.account.uid, req.params.uid);
-      const owner = toOwner({ uid: req.params.uid }, data);
+      const row = await allowed(req.userId, req.params.uid);
+      const profile = owner(row);
 
       res.json({
         profile: {
-          id: owner.id,
-          fullName: owner.fullName,
-          area: owner.area,
-          aboutMe: owner.aboutMe,
-          age: owner.age,
-          gender: owner.gender,
-          profileVisibility: owner.profileVisibility,
-          photoVersion: owner.photoVersion,
-          interests: safeInterests(data),
+          id: profile.id,
+          fullName: profile.fullName,
+          area: profile.area,
+          aboutMe: profile.aboutMe,
+          age: profile.age,
+          gender: profile.gender,
+          profileVisibility: profile.profileVisibility,
+          photoVersion: profile.photoVersion,
+          interests: safeInterests({ interests: row.interests }),
         },
       });
     }),
@@ -387,8 +449,8 @@ function installProfileRoutes(app, db, { toOwner, now = Date.now } = {}) {
   app.get(
     "/api/profiles/:uid/photo",
     handle(async (req, res) => {
-      const data = await allowed(req.account.uid, req.params.uid);
-      const version = profileExtras(data).photoVersion;
+      const row = await allowed(req.userId, req.params.uid);
+      const version = row.photo_version;
 
       if (!version || req.query.version !== version) {
         throw fail("Photo not found.", 404);
@@ -402,27 +464,27 @@ function installProfileRoutes(app, db, { toOwner, now = Date.now } = {}) {
       if (saved && saved.expires > now()) {
         bytes = saved.bytes;
       } else {
-        const snapshot = await photoFor(req.params.uid).get();
-        const photo = snapshot.exists ? snapshot.data() : null;
+        const result = await db.query(
+          `SELECT version, mime_type, content
+           FROM profile_photos
+           WHERE user_id = $1::uuid`,
+          [req.params.uid],
+        );
+        const photo = result.rows[0];
 
         if (!photo || photo.version !== version) {
           throw fail("Photo not found.", 404);
         }
 
-        if (
-          photo.ownerId !== req.params.uid ||
-          photo.contentType !== "image/jpeg" ||
-          !(photo.jpeg instanceof Uint8Array)
-        ) {
+        if (photo.mime_type !== "image/jpeg" || !Buffer.isBuffer(photo.content)) {
           throw fail("Photo is unavailable.", 503);
         }
 
-        bytes = Buffer.from(photo.jpeg);
+        bytes = photo.content;
 
         if (
           bytes.length < 4 ||
           bytes.length > MAX_PHOTO ||
-          photo.byteLength !== bytes.length ||
           bytes[0] !== 0xff ||
           bytes[1] !== 0xd8
         ) {
@@ -448,75 +510,90 @@ function installProfileRoutes(app, db, { toOwner, now = Date.now } = {}) {
   );
 
   async function change(uid, operation, jpeg, remove, hash) {
-    const ref = owned(uid);
-    const photoRef = photoFor(uid);
+    const client = await db.connect();
+    const version = remove ? null : operation;
+    try {
+      await client.query("BEGIN");
+      const result = await client.query(
+        `SELECT u.*, COALESCE(${interestsSql}, ARRAY[]::text[]) AS interests
+         FROM users u
+         WHERE u.id = $1::uuid
+         FOR UPDATE`,
+        [uid],
+      );
+      const row = result.rows[0];
 
-    const version = remove ? null : randomUUID();
-    const updatedAt = new Date(now());
-
-    const saved = await db.runTransaction(async (tx) => {
-      const snap = await tx.get(ref);
-
-      if (!snap.exists) {
+      if (!row) {
         throw fail("Save your profile before uploading a photo.", 404);
       }
 
-      const data = snap.data();
-
-      if (
-        !remove &&
-        data.photoStorage === "firestore" &&
-        data.photoRequestId === operation &&
-        validId(data.photoVersion)
-      ) {
-        if (data.photoHash !== hash) {
+      if (!remove && row.photo_version === operation) {
+        const photoResult = await client.query(
+          `SELECT mime_type, content FROM profile_photos WHERE user_id = $1::uuid`,
+          [uid],
+        );
+        const savedPhoto = photoResult.rows[0];
+        if (
+          !savedPhoto ||
+          savedPhoto.mime_type !== "image/jpeg" ||
+          createHash("sha256").update(savedPhoto.content).digest("hex") !== hash
+        ) {
           throw fail("Choose the photo again before uploading it.", 409);
         }
 
-        return data;
-      }
-
-      if (data.photoLock?.until > now()) {
-        throw fail("A photo change is already in progress. Please wait.", 409);
+        await client.query("COMMIT");
+        for (const key of cache.keys()) {
+          if (key.startsWith(uid + ":")) cache.delete(key);
+        }
+        return owner(row);
       }
 
       if (remove) {
-        tx.delete(photoRef);
+        await client.query(
+          `DELETE FROM profile_photos WHERE user_id = $1::uuid`,
+          [uid],
+        );
       } else {
-        tx.set(photoRef, {
-          ownerId: uid,
-          contentType: "image/jpeg",
-          jpeg,
-          byteLength: jpeg.length,
-          version,
-          updatedAt,
-        });
+        await client.query(
+          `INSERT INTO profile_photos (user_id, version, mime_type, content, updated_at)
+           VALUES ($1::uuid, $2, 'image/jpeg', $3, $4)
+           ON CONFLICT (user_id) DO UPDATE
+           SET version = EXCLUDED.version,
+               mime_type = EXCLUDED.mime_type,
+               content = EXCLUDED.content,
+               updated_at = EXCLUDED.updated_at`,
+          [uid, version, jpeg, new Date(now())],
+        );
       }
 
-      const changes = {
-        photoStorage: remove ? null : "firestore",
-        photoVersion: version,
-        photoRequestId: remove ? null : operation,
-        photoHash: remove ? null : hash,
-        photoFileId: null,
-        photoLock: null,
+      const update = await client.query(
+        `UPDATE users SET photo_version = $2 WHERE id = $1::uuid
+         RETURNING *`,
+        [uid, version],
+      );
+      await client.query("COMMIT");
+
+      for (const key of cache.keys()) {
+        if (key.startsWith(uid + ":")) cache.delete(key);
+      }
+      const updated = {
+        ...row,
+        ...update.rows[0],
+        photo_version: version,
       };
-
-      tx.set(ref, changes, { merge: true });
-
-      return { ...data, ...changes };
-    });
-
-    for (const key of cache.keys()) {
-      if (key.startsWith(uid + ":")) cache.delete(key);
+      return owner(updated);
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
     }
 
-    return toOwner({ uid }, saved);
   }
 
   const mutation = (remove) =>
     handle(async (req, res) => {
-      const uid = req.account.uid;
+      const uid = req.userId;
       const body = req.body;
 
       if (!body || typeof body !== "object" || Array.isArray(body)) {
@@ -543,7 +620,7 @@ function installProfileRoutes(app, db, { toOwner, now = Date.now } = {}) {
           ? createHash("sha256").update(jpeg).digest("hex")
           : "";
 
-        const user = await change(
+          const user = await change(
           uid,
           operation,
           jpeg,

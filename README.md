@@ -16,14 +16,50 @@ This is an [Expo](https://expo.dev) project created with [`create-expo-app`](htt
    npx expo start
    ```
 
-In the output, you'll find options to open the app in a
+In the output, you'll find options to open the app in a:
 
 - [development build](https://docs.expo.dev/develop/development-builds/introduction/)
 - [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
 - [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
 - [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
 
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
+You can start developing by editing files inside the **app** directory. This
+project uses [file-based routing](https://docs.expo.dev/router/introduction).
+
+## Backend and PostgreSQL
+
+Firebase remains the sign-in provider. The Node backend verifies Firebase ID
+tokens and stores application data in PostgreSQL; the mobile app must not
+connect to PostgreSQL directly.
+
+Configure these values in the repository-root `.env` file:
+
+```env
+FIREBASE_PROJECT_ID=your-firebase-project-id
+GOOGLE_APPLICATION_CREDENTIALS=credentials/credentials.json
+
+HOST_NAME=your-postgres-host
+PG_PORT=5432
+PG_DATABASE=your-database
+PG_USER=your-database-user
+PG_PASSWORD=your-database-password
+PG_CA_PATH=credentials/ca.pem
+```
+
+Keep `.env` and the Firebase service-account JSON private. `PG_CA_PATH` is
+optional when the CA certificate is at `credentials/ca.pem`.
+
+Install backend dependencies, apply the additive database migration, then
+start the API:
+
+```bash
+npm install --prefix backend
+npm run db:migrate --prefix backend
+npm start --prefix backend
+```
+
+See [MIGRATION.md](./MIGRATION.md) for the persistence changes and notes for
+existing users.
 
 ## Get a fresh project
 

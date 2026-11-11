@@ -16,6 +16,7 @@ export type ChatMessage = {
 
 export type Chat = {
   id: string;
+  peerId?: string;
   name: string;
   handle: string;
   preview: string;

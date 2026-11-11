@@ -1,7 +1,12 @@
 const { installViewportRoute } = require("./map-viewport");
 const { createHash } = require("node:crypto");
-const { groupEventScope, readMemberEvents } = require("./group-event-access");
-const { cellsFor, busyArea } = require("./map-geography");
+const {
+  groupEventScope,
+  readMemberEvents,
+  cellsFor,
+  busyArea,
+  groupMapIndex,
+} = require("./map-geography");
 const DAY = 86400000,
   PAGE = 60,
   MAX_VENUES = 2000;
@@ -101,12 +106,11 @@ function rejectionReason(event, place, options) {
     return "interests";
   return null;
 }
-function groupEvent(doc) {
-  const d = doc.data();
+function groupEvent(d) {
   if (d.status !== "published") return null;
   return {
-    id: doc.id,
-    seriesId: doc.id,
+    id: d.id,
+    seriesId: d.id,
     title: d.title,
     location: d.location,
     venueName: d.venueName || d.location,
@@ -125,8 +129,9 @@ function groupEvent(doc) {
 
 function createMapService(
   db,
-  { external, now = Date.now, index = { ready: true }, logger = console } = {},
+  { external, now = Date.now, index, logger = console } = {},
 ) {
+  index ||= groupMapIndex(db);
   const cache = new Map();
   async function load(options, uid) {
     const scope = await groupEventScope(db, uid);
@@ -170,7 +175,7 @@ function createMapService(
     const { out } = raw;
     // Only public source records share the area cache. Group events are read
     // afresh for this account so new events and membership changes take effect.
-    const groupDocs = await readMemberEvents(
+    const groupEvents = await readMemberEvents(
       db,
       scope,
       [
@@ -260,12 +265,12 @@ function createMapService(
     for (const record of out.records)
       for (const event of record.sessions || [])
         add(event, record, record.ref, "external");
-    for (const doc of groupDocs) {
-      const event = groupEvent(doc);
+    for (const eventRow of groupEvents) {
+      const event = groupEvent(eventRow);
       if (event && scope.allows(event))
         add(
           event,
-          { ...doc.data(), venueName: event.venueName },
+          { ...eventRow, venueName: event.venueName },
           null,
           "group",
         );
@@ -364,16 +369,19 @@ function createMapService(
     }
     const groupIds = [...entry.groupIds];
     for (let i = 0; i < groupIds.length; i += 20) {
-      const docs = await Promise.all(
-        groupIds
-          .slice(i, i + 20)
-          .map((key) => db.collection("events").doc(key).get()),
+      const { rows } = await db.query(
+        `SELECT id, title, location, description, latitude, longitude,
+                starts_at AS "startsAt", ends_at AS "endsAt", status,
+                interests, group_id::text AS "groupId",
+                time_zone AS "timeZone"
+           FROM group_events
+          WHERE id = ANY($1::text[]) AND status = 'published'`,
+        [groupIds.slice(i, i + 20)],
       );
-      for (const doc of docs)
-        if (doc.exists) {
-          const event = groupEvent(doc);
-          if (event && data.scope.allows(event)) events.push(event);
-        }
+      for (const row of rows) {
+        const event = groupEvent(row);
+        if (event && data.scope.allows(event)) events.push(event);
+      }
     }
     const seen = new Set();
     const filtered = events
@@ -440,12 +448,13 @@ function createMapService(
   return { summaries, schedule };
 }
 function installMapRoutes(app, db, dependencies) {
-  // Idempotent: route installation also ensures scheduled calendar imports run.
-  dependencies.external.start?.();
+  const index = dependencies.index || groupMapIndex(db, dependencies);
+  dependencies.index = index;
   installViewportRoute(app, db, {
     now: dependencies.now,
     logger: dependencies.logger,
     sources: dependencies.sources,
+    index,
   });
   const service = createMapService(db, dependencies);
   const handle = (fn) => async (req, res, next) => {
@@ -462,7 +471,7 @@ function installMapRoutes(app, db, dependencies) {
   };
   app.get(
     "/api/map/venues",
-    handle((req, options) => service.summaries(options, req.account?.uid)),
+    handle((req, options) => service.summaries(options, req.userId)),
   );
   app.get(
     "/api/map/venues/:id/events",
@@ -471,7 +480,7 @@ function installMapRoutes(app, db, dependencies) {
         options,
         req.params.id,
         req.query.cursor,
-        req.account?.uid,
+        req.userId,
       ),
     ),
   );

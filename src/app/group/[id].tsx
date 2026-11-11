@@ -42,6 +42,7 @@ import {
 import { GroupEvents } from "../../components/group-events";
 import { useAuth } from "../../context/auth-context";
 import type { AppColors } from "../../constants/app-colors";
+import { auth } from "../../lib/firebase";
 import { ApiError } from "../../lib/api";
 import { startChat } from "../../lib/messaging";
 import {
@@ -895,10 +896,12 @@ export default function GroupScreen() {
                     !!previous &&
                     previous.senderId === item.senderId;
 
-                  const own = item.senderId === uid;
+                  const own =
+                    item.senderId === uid ||
+                    item.senderId === auth.currentUser?.uid;
 
                   return (
-                    <View>
+                    <View style={{ width: "100%" }}>
                       {newDay && (
                         <Text style={chat.day}>
                           {messageDay(item.createdAt)}

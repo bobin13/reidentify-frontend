@@ -31,6 +31,7 @@ yarn-error.*
 *.pem
 
 # local env files
+.env
 .env*.local
 
 # typescript
@@ -45,5 +46,7 @@ example
 backend/node_modules/
 backend/.env
 backend/.env.*
+/backend/credentials/
 **/firebase-service-account.json
 **/*service-account*.json
+credentials/credentials.json

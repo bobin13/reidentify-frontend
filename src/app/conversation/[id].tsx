@@ -25,6 +25,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import {
+  ChatAvatar,
   ChatBubble,
   useChatPhotos,
 } from "../../components/chat-display";
@@ -335,7 +336,10 @@ export default function ConversationScreen() {
     state.owner === key ? state.messages : [];
 
   const photos = useChatPhotos(
-    messages.map((message) => message.senderId),
+    [
+      ...(chat?.peerId ? [chat.peerId] : []),
+      ...messages.map((message) => message.senderId),
+    ],
   );
 
   const goBack = () =>
@@ -382,16 +386,29 @@ export default function ConversationScreen() {
           <Text style={styles.body}>← Back</Text>
         </Pressable>
 
-        <View style={{ flex: 1 }}>
-          <Text style={styles.title}>
-            {chat?.name || "Conversation"}
-          </Text>
-
-          {!!chat?.handle && (
-            <Text style={styles.muted}>
-              {chat.handle}
+        <View
+          style={{
+            flex: 1,
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 10,
+          }}
+        >
+          <ChatAvatar
+            name={chat?.name || "Conversation"}
+            uri={chat?.peerId ? photos[chat.peerId] : undefined}
+          />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.title}>
+              {chat?.name || "Conversation"}
             </Text>
-          )}
+
+            {!!chat?.handle && (
+              <Text style={styles.muted}>
+                {chat.handle}
+              </Text>
+            )}
+          </View>
         </View>
       </View>
 
@@ -456,7 +473,9 @@ export default function ConversationScreen() {
           ) : null
         }
         renderItem={({ item, index }) => {
-          const own = item.senderId === uid;
+          const own =
+            item.senderId === uid ||
+            item.senderId === auth.currentUser?.uid;
           const previous = messages[index - 1];
 
           const continuing =

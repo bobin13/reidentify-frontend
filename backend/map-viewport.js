@@ -1,22 +1,9 @@
 const { createHash } = require("node:crypto");
-const { groupEventScope } = require("./group-event-access");
+const { groupEventScope } = require("./map-geography");
 const DAY = 86400000,
   STEP = 0.05;
 const SOURCE_CACHE_MS = 20000;
 const PLAN_VERSION = 3;
-const GROUP_FIELDS = [
-  "title",
-  "location",
-  "venueName",
-  "latitude",
-  "longitude",
-  "startsAt",
-  "endsAt",
-  "status",
-  "groupId",
-  "interests",
-  "timeZone",
-];
 const hash = (value) =>
   createHash("sha256").update(value).digest("hex").slice(0, 24);
 const fail = (message, status = 400) =>
@@ -197,14 +184,13 @@ function createViewportService(
       return sourceMetadata.promise;
     const entry = { expires: Infinity, promise: null };
     sourceMetadata = entry;
-    entry.promise = Promise.all(
-      sources.map((source) =>
-        db.collection("externalEventSources").doc(source.id).get(),
-      ),
-    )
-      .then((snapshots) => {
+    entry.promise = db
+      .query("SELECT * FROM external_event_sources WHERE id = ANY($1::text[])", [
+        sources.map((source) => source.id),
+      ])
+      .then(({ rows }) => {
         entry.expires = now() + SOURCE_CACHE_MS;
-        return snapshots;
+        return new Map(rows.map((row) => [row.id, row]));
       })
       .catch((error) => {
         if (sourceMetadata === entry) sourceMetadata = null;
@@ -212,43 +198,47 @@ function createViewportService(
       });
     return entry.promise;
   }
-  async function loadPage(options, rawCursor, uid) {
-    const scope = await groupEventScope(db, uid);
+  async function loadPage(options, rawCursor, userId) {
+    const scope = await groupEventScope(db, userId);
     index.ensure?.();
     const clock = now();
-    const snapshots = await snapshotsForView();
+    const saved = await snapshotsForView();
     const statuses = [],
       jobs = [],
       versions = [];
-    sources.forEach((source, i) => {
-      const data = snapshots[i].data() || {},
-        ready = Boolean(data.activeRunId) && data.mapSchemaVersion === 2;
+    sources.forEach((source) => {
+      const data = saved.get(source.id) || {},
+        ready =
+          Boolean(data.active_run_id) &&
+          Number(data.map_schema_version) === 2;
       statuses.push({
         id: source.id,
         name: source.name,
         area: source.area,
         ready,
-        refreshing: data.leaseUntil > clock || (!ready && !data.lastError),
-        lastSuccessAt: data.lastSuccessAt
-          ? new Date(data.lastSuccessAt).toISOString()
+        refreshing:
+          (data.lease_until && new Date(data.lease_until).getTime() > clock) ||
+          (!ready && !data.last_error),
+        lastSuccessAt: data.last_success_at
+          ? new Date(data.last_success_at).toISOString()
           : null,
         stale:
-          Boolean(data.lastError) ||
-          !data.lastSuccessAt ||
-          clock - data.lastSuccessAt > DAY,
+          Boolean(data.last_error) ||
+          !data.last_success_at ||
+          clock - new Date(data.last_success_at).getTime() > DAY,
       });
       versions.push([
         source.id,
-        data.activeRunId || "",
-        data.mapSchemaVersion || 0,
+        data.active_run_id || "",
+        data.map_schema_version || 0,
       ]);
       if (!ready) return;
-      if (!Array.isArray(data.mapCells))
+      if (!Array.isArray(data.map_cells))
         throw fail(
           "A saved calendar needs its map index refreshed. Please retry shortly.",
           503,
         );
-      const cells = [...new Set(data.mapCells)]
+      const cells = [...new Set(data.map_cells)]
         .filter(
           (cell) =>
             typeof cell === "string" && cellIntersects(cell, options.bounds),
@@ -258,7 +248,7 @@ function createViewportService(
         jobs.push({
           kind: "external",
           source: source.id,
-          run: data.activeRunId,
+          run: data.active_run_id,
           cells: cells.slice(offset, offset + 20),
         });
     });
@@ -321,35 +311,38 @@ function createViewportService(
     ) {
       const job = jobs[cursor.job],
         limit = Math.min(job.kind === "external" ? 32 : 30, 120 - docs);
-      let query;
+      let found;
       if (job.kind === "external") {
-        const collection = db
-          .collection("externalEventSources")
-          .doc(job.source)
-          .collection("runs")
-          .doc(job.run)
-          .collection("mapSummaries");
-        query = collection.where("mapCell", "in", job.cells).limit(limit);
-        if (cursor.last) {
-          const previous = await collection.doc(cursor.last).get();
-          if (!previous.exists)
-            throw fail("The map results changed. Reload this view.", 409);
-          query = query.startAfter(previous);
-        }
+        const result = await db.query(
+          `SELECT chunk_id AS id, venue_id AS "venueId",
+                  venue_name AS "venueName", location, latitude, longitude,
+                  map_cell AS "mapCell", sessions
+             FROM external_event_venues
+            WHERE source_id = $1 AND run_id = $2
+              AND map_cell = ANY($3::text[]) AND chunk_id > $4
+            ORDER BY chunk_id
+            LIMIT $5`,
+          [job.source, job.run, job.cells, cursor.last, limit],
+        );
+        found = result.rows;
       } else {
-        query = db
-          .collection("events")
-          .where("groupId", "==", job.groupId)
-          .orderBy("__name__")
-          .select(...GROUP_FIELDS)
-          .limit(limit);
-        if (cursor.last) query = query.startAfter(cursor.last);
+        const result = await db.query(
+          `SELECT id, title, location, latitude, longitude,
+                  starts_at AS "startsAt", ends_at AS "endsAt",
+                  status, group_id::text AS "groupId", interests,
+                  time_zone AS "timeZone"
+             FROM group_events
+            WHERE group_id = $1::uuid AND status = 'published' AND id > $2
+            ORDER BY id
+            LIMIT $3`,
+          [job.groupId, cursor.last, limit],
+        );
+        found = result.rows;
       }
-      const found = await query.get();
       queries++;
       let stopped = false;
-      for (const doc of found.docs) {
-        const value = doc.data(),
+      for (const value of found) {
+        const docId = value.id,
           size = Buffer.byteLength(JSON.stringify(value), "utf8");
         if (size > 2 * 1024 * 1024)
           throw fail("A calendar map record exceeds its supported size.", 503);
@@ -366,7 +359,6 @@ function createViewportService(
           add(
             {
               ...value,
-              id: doc.id,
               startsAt: iso(value.startsAt),
               endsAt: iso(value.endsAt),
             },
@@ -374,11 +366,11 @@ function createViewportService(
             "group",
           );
         }
-        cursor.last = doc.id;
+        cursor.last = docId;
         cursor.cell = "";
       }
       if (stopped) break;
-      if (found.docs.length < limit) {
+      if (found.length < limit) {
         cursor.job++;
         cursor.last = "";
         cursor.cell = "";
@@ -419,10 +411,10 @@ function createViewportService(
       indexing: !index.ready,
     };
   }
-  async function page(options, rawCursor, uid) {
+  async function page(options, rawCursor, userId) {
     if (readFailure && now() < readBlockedUntil) throw readFailure;
     try {
-      return await loadPage(options, rawCursor, uid);
+      return await loadPage(options, rawCursor, userId);
     } catch (error) {
       if (
         [8, "8", "resource-exhausted", "RESOURCE_EXHAUSTED"].includes(
@@ -449,7 +441,7 @@ function installViewportRoute(app, db, dependencies = {}) {
         await service.page(
           viewportOptions(req.query),
           req.query.cursor,
-          req.account?.uid,
+          req.userId,
         ),
       );
     } catch (error) {

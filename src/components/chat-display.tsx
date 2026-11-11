@@ -391,6 +391,7 @@ export function ChatBubble({
 }) {
   const { colors } = useAppTheme();
   const green = own && variant === "direct";
+  const ownGroup = own && variant === "group";
 
   return (
     <View
@@ -401,12 +402,23 @@ export function ChatBubble({
         paddingHorizontal: 10,
         paddingTop: 6,
         paddingBottom: 5,
-        borderWidth: 1,
-        borderColor: green ? colors.accent : colors.border,
+        borderWidth: 1.5,
+        borderColor: green
+          ? colors.background
+          : ownGroup
+            ? colors.accent
+            : colors.border,
         borderRadius: 12,
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.24,
+        shadowRadius: 4,
+        elevation: 4,
         backgroundColor: green
           ? colors.accent
-          : colors.surface,
+          : ownGroup
+            ? colors.background
+            : colors.surface,
       }}
     >
       {showSender && (

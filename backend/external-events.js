@@ -1,6 +1,6 @@
 const { createHash, randomUUID } = require("node:crypto");
 const { decodeHTML } = require("entities");
-const { mapCellFor, readCells } = require("./map-geography");
+const { mapCellFor } = require("./map-geography");
 const {
   EXTRA_SOURCES,
   collectAdditionalSource,
@@ -11,7 +11,6 @@ const IMPORT_REVISION = 4;
 const REFRESH_MS = 6 * 60 * 60 * 1000;
 const RETRY_MS = 30 * 60 * 1000;
 const LEASE_MS = 10 * 60 * 1000;
-const SOURCE_COLLECTION = "externalEventSources";
 const CKAN = "https://ckan0.cf.opendata.inter.prod-toronto.ca/api/3/action/";
 const services = new WeakMap();
 // New adapters version themselves; adding one must not force every old source
@@ -651,142 +650,160 @@ async function collectSource(
   return { ...result, windowEnd: new Date(window.end).toISOString() };
 }
 
-function mapSummaryFor(chunk) {
+const json = (value) => (typeof value === "string" ? JSON.parse(value) : value);
+const millis = (value) =>
+  value == null ? 0 : value instanceof Date ? value.getTime() : Date.parse(value);
+const iso = (value) =>
+  value == null || !Number.isFinite(millis(value))
+    ? null
+    : new Date(millis(value)).toISOString();
+const sourceMap = (row) =>
+  new Map((row || []).map((source) => [source.id, source]));
+
+async function inTransaction(pool, operation) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await operation(client);
+    await client.query("COMMIT");
+    return result;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+function sourceStatus(source, row, clock) {
+  const active = row?.active_run_id;
+  const lastSuccess = iso(row?.last_success_at);
+  const ready =
+    Boolean(active) && Number(row?.map_schema_version) === 2;
+  const savedStats = json(row?.stats || {});
+  const revision = row?.import_revision;
   return {
-    venueId: chunk.venueId || chunk.id.replace(/-\d+$/, ""),
-    venueName: chunk.venueName,
-    location: chunk.location,
-    latitude: chunk.latitude,
-    longitude: chunk.longitude,
-    mapCell: mapCellFor(chunk.latitude, chunk.longitude),
-    sessions: (chunk.sessions || []).map((item) => ({
-      id: item.id,
-      seriesId: item.seriesId || item.id,
-      title: item.title,
-      startsAt: item.startsAt,
-      endsAt: item.endsAt,
-      interests: item.interests || [],
-      timeZone: item.timeZone || "America/Toronto",
-    })),
+    id: source.id,
+    name: source.name,
+    area: source.area,
+    ready: Boolean(active),
+    refreshing: millis(row?.lease_until) > clock,
+    lastSuccessAt: lastSuccess,
+    stale:
+      Boolean(row?.last_error) ||
+      !lastSuccess ||
+      clock - millis(row?.last_success_at) > DAY,
+    stats:
+      savedStats && Object.keys(savedStats).length ? savedStats : null,
+    importRevision:
+      revision == null || revision === ""
+        ? null
+        : Number.isNaN(Number(revision))
+          ? revision
+          : Number(revision),
+    mapReady: ready,
   };
 }
 
 // A complete source snapshot is published atomically through one pointer.
 // Failed/partial downloads never replace the last successful schedule.
 function createExternalEventService(
-  db,
+  pool,
   { now = Date.now, fetchImpl = fetch, logger = console, readerOptions } = {},
 ) {
-  const sourceRefs = db.collection(SOURCE_COLLECTION);
   const venueCoordinates = {
     async get(id) {
-      return (
-        (
-          await db.collection("externalVenueCoordinates").doc(id).get()
-        ).data() || null
+      const { rows } = await pool.query(
+        "SELECT value FROM external_venue_coordinates WHERE id = $1",
+        [id],
       );
+      return rows[0]?.value || null;
     },
     async set(id, value) {
-      await db.collection("externalVenueCoordinates").doc(id).set(value);
+      await pool.query(
+        `INSERT INTO external_venue_coordinates (id, value, updated_at)
+         VALUES ($1, $2::jsonb, now())
+         ON CONFLICT (id) DO UPDATE
+           SET value = EXCLUDED.value, updated_at = now()`,
+        [id, JSON.stringify(value)],
+      );
     },
   };
   let mapMetadata = null;
   let timer = null,
     running = null;
+
   async function syncOne(source, force) {
-    const reference = sourceRefs.doc(source.id),
-      owner = randomUUID(),
+    const owner = randomUUID(),
       startedAt = now();
-    const claimed = await db.runTransaction(async (tx) => {
-      const snap = await tx.get(reference),
-        previous = snap.data() || {};
-      if (
-        previous.leaseUntil > startedAt ||
-        (!force &&
-          previous.importRevision === revisionFor(source) &&
-          previous.nextAttemptAt > startedAt)
-      )
-        return false;
-      tx.set(
-        reference,
-        {
-          name: source.name,
-          area: source.area,
-          leaseOwner: owner,
-          leaseUntil: startedAt + LEASE_MS,
-          lastAttemptAt: startedAt,
-        },
-        { merge: true },
+    const claimed = await inTransaction(pool, async (client) => {
+      await client.query(
+        `INSERT INTO external_event_sources (id, name, area)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (id) DO NOTHING`,
+        [source.id, source.name, source.area],
       );
-      return true;
+      const { rows } = await client.query(
+        "SELECT * FROM external_event_sources WHERE id = $1 FOR UPDATE",
+        [source.id],
+      );
+      const previous = rows[0];
+      if (
+        millis(previous.lease_until) > startedAt ||
+        (!force &&
+          previous.import_revision === String(revisionFor(source)) &&
+          millis(previous.next_attempt_at) > startedAt)
+      )
+        return { claimed: false, previous };
+      await client.query(
+        `UPDATE external_event_sources
+            SET name = $2, area = $3, lease_owner = $4,
+                lease_until = $5, last_attempt_at = $6
+          WHERE id = $1`,
+        [
+          source.id,
+          source.name,
+          source.area,
+          owner,
+          new Date(startedAt + LEASE_MS),
+          new Date(startedAt),
+        ],
+      );
+      return { claimed: true, previous };
     });
-    if (!claimed) {
-      if (source.id === "ottawa-library") {
-        const saved = (await reference.get()).data() || {};
+    if (!claimed.claimed) {
+      const saved = claimed.previous;
+      if (source.id === "ottawa-library")
         logger.log(
           "[events-debug] " +
             JSON.stringify({
               source: source.id,
               action: "usingSavedSnapshot",
               stats: saved.stats || null,
-              importRevision: saved.importRevision ?? null,
-              lastSuccessAt: saved.lastSuccessAt
-                ? new Date(saved.lastSuccessAt).toISOString()
-                : null,
-              importRunning: saved.leaseUntil > now(),
-              nextAttemptAt: saved.nextAttemptAt
-                ? new Date(saved.nextAttemptAt).toISOString()
-                : null,
+              importRevision: saved.import_revision ?? null,
+              lastSuccessAt: iso(saved.last_success_at),
+              importRunning: millis(saved.lease_until) > now(),
+              nextAttemptAt: iso(saved.next_attempt_at),
             }),
         );
-      }
       return;
     }
-    const run = reference.collection("runs").doc(owner);
+
+    let runCreated = false,
+      published = false;
     try {
-      // Index the existing successful snapshot before contacting the publisher.
-      // Saved activities remain usable even if that publisher is offline today.
-      const legacy = (await reference.get()).data() || {};
-      if (legacy.activeRunId && legacy.mapSchemaVersion !== 2) {
-        const legacyRun = reference.collection("runs").doc(legacy.activeRunId);
-        const old = await legacyRun.collection("venues").get();
-        const mapCells = new Set();
-        for (let offset = 0; offset < old.docs.length; offset += 200) {
-          const batch = db.batch();
-          for (const doc of old.docs.slice(offset, offset + 200)) {
-            const summary = mapSummaryFor({ ...doc.data(), id: doc.id });
-            mapCells.add(summary.mapCell);
-            batch.set(
-              legacyRun.collection("mapSummaries").doc(doc.id),
-              summary,
-            );
-          }
-          await batch.commit();
-        }
-        await db.runTransaction(async (tx) => {
-          const latest = (await tx.get(reference)).data() || {};
-          if (
-            latest.leaseOwner !== owner ||
-            latest.leaseUntil <= now() ||
-            latest.activeRunId !== legacy.activeRunId
-          )
-            throw new Error("Saved map index changed; retrying.");
-          tx.set(
-            reference,
-            { mapSchemaVersion: 2, mapCells: [...mapCells] },
-            { merge: true },
-          );
-        });
-        mapMetadata = null;
-      }
       const collected = await collectSource(source, {
         now: startedAt,
         fetchImpl,
         venueCoordinates,
         readerOptions,
       });
-      await run.set({ createdAt: startedAt, status: "building" });
-      // Chunk large venue schedules well below Firestore's 1 MiB document limit.
+      await pool.query(
+        `INSERT INTO external_event_runs (source_id, id, created_at, status)
+         VALUES ($1, $2, $3, 'building')`,
+        [source.id, owner, new Date(startedAt)],
+      );
+      runCreated = true;
       const chunks = [];
       for (const venue of collected.venues) {
         let current = [],
@@ -813,61 +830,89 @@ function createExternalEventService(
             sessions: current,
           });
       }
-      for (let offset = 0; offset < chunks.length; offset += 200) {
-        const batch = db.batch();
-        for (const chunk of chunks.slice(offset, offset + 200)) {
-          batch.set(run.collection("venues").doc(chunk.id), {
-            ...chunk,
-            venueId: chunk.id.replace(/-\d+$/, ""),
-            sourceId: source.id,
-          });
-          batch.set(
-            run.collection("mapSummaries").doc(chunk.id),
-            mapSummaryFor(chunk),
+      for (let offset = 0; offset < chunks.length; offset += 100) {
+        const batch = chunks.slice(offset, offset + 100);
+        const values = [],
+          params = [];
+        batch.forEach((chunk, index) => {
+          const base = index * 10;
+          params.push(
+            source.id,
+            owner,
+            chunk.id,
+            chunk.id.replace(/-\d+$/, ""),
+            chunk.venueName,
+            chunk.location,
+            chunk.latitude,
+            chunk.longitude,
+            mapCellFor(chunk.latitude, chunk.longitude),
+            JSON.stringify(chunk.sessions),
           );
-        }
-        await batch.commit();
-      }
-      const committed = await db.runTransaction(async (tx) => {
-        const latest = (await tx.get(reference)).data() || {};
-        if (latest.leaseOwner !== owner || latest.leaseUntil <= now())
-          return false;
-        tx.set(
-          run,
-          { status: "complete", stats: collected.stats },
-          { merge: true },
+          values.push(
+            `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, ` +
+              `$${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, ` +
+              `$${base + 9}, $${base + 10}::jsonb)`,
+          );
+        });
+        await pool.query(
+          `INSERT INTO external_event_venues
+             (source_id, run_id, chunk_id, venue_id, venue_name, location,
+              latitude, longitude, map_cell, sessions)
+           VALUES ${values.join(", ")}`,
+          params,
         );
-        tx.set(
-          reference,
-          {
-            activeRunId: owner,
-            mapSchemaVersion: 2,
-            mapCells: [
-              ...new Set(
-                chunks.map((chunk) =>
-                  mapCellFor(chunk.latitude, chunk.longitude),
-                ),
+      }
+
+      const committed = await inTransaction(pool, async (client) => {
+        const { rows } = await client.query(
+          "SELECT * FROM external_event_sources WHERE id = $1 FOR UPDATE",
+          [source.id],
+        );
+        const latest = rows[0];
+        if (
+          latest.lease_owner !== owner ||
+          millis(latest.lease_until) <= now()
+        )
+          return false;
+        await client.query(
+          `UPDATE external_event_runs
+              SET status = 'complete', stats = $3::jsonb
+            WHERE source_id = $1 AND id = $2`,
+          [source.id, owner, JSON.stringify(collected.stats)],
+        );
+        await client.query(
+          `UPDATE external_event_sources
+              SET active_run_id = $2, map_schema_version = 2,
+                  map_cells = $3::text[], import_revision = $4,
+                  consecutive_failures = 0, last_success_at = $5,
+                  window_end = $6, next_attempt_at = $7,
+                  lease_owner = NULL, lease_until = NULL, last_error = '',
+                  stats = $8::jsonb
+            WHERE id = $1`,
+          [
+            source.id,
+            owner,
+            [...new Set(
+              chunks.map((chunk) =>
+                mapCellFor(chunk.latitude, chunk.longitude),
               ),
-            ],
-            importRevision: revisionFor(source),
-            consecutiveFailures: 0,
-            lastSuccessAt: now(),
-            windowEnd: collected.windowEnd,
-            nextAttemptAt:
+            )],
+            String(revisionFor(source)),
+            new Date(now()),
+            new Date(collected.windowEnd),
+            new Date(
               now() +
-              (collected.stats.coordinateFailures ? RETRY_MS : REFRESH_MS),
-            leaseOwner: "",
-            leaseUntil: 0,
-            lastError: "",
-            stats: collected.stats,
-          },
-          { merge: true },
+                (collected.stats.coordinateFailures ? RETRY_MS : REFRESH_MS),
+            ),
+            JSON.stringify(collected.stats),
+          ],
         );
         return true;
       });
-      if (committed) mapMetadata = null;
       if (!committed)
         throw new Error("Import lease expired; retained the previous schedule");
+      published = true;
+      mapMetadata = null;
       logger.log(
         "[events] " +
           source.name +
@@ -890,40 +935,49 @@ function createExternalEventService(
         );
       for (const warning of collected.stats.warnings || [])
         logger.warn("[events] " + source.name + " venue lookup: " + warning);
-      // Older snapshots remain for a day so in-flight readers can finish.
-      const old = await reference
-        .collection("runs")
-        .where("createdAt", "<", now() - DAY)
-        .get();
-      for (const doc of old.docs) {
-        if (doc.id !== owner) await db.recursiveDelete(doc.ref);
-      }
+      await pool.query(
+        `DELETE FROM external_event_runs
+          WHERE source_id = $1 AND id <> $2 AND created_at < $3`,
+        [source.id, owner, new Date(now() - DAY)],
+      );
     } catch (error) {
       const message = String(error.message || "Import failed").slice(0, 900);
-      let hadSavedListings = false;
-      await db.runTransaction(async (tx) => {
-        const latest = (await tx.get(reference)).data() || {};
-        hadSavedListings = Boolean(latest.activeRunId);
-        if (latest.leaseOwner === owner)
-          tx.set(
-            reference,
-            {
-              leaseOwner: "",
-              leaseUntil: 0,
-              lastError: message,
-              importRevision: revisionFor(source),
-              consecutiveFailures: (latest.consecutiveFailures || 0) + 1,
-              nextAttemptAt:
-                now() +
+      if (published) {
+        logger.warn(
+          "[events] " + source.name + " snapshot published; cleanup deferred: " + message,
+        );
+        return;
+      }
+      const hadSavedListings = Boolean(claimed.previous.active_run_id);
+      await inTransaction(pool, async (client) => {
+        await client.query(
+          `UPDATE external_event_sources
+              SET lease_owner = NULL, lease_until = NULL, last_error = $3,
+                  import_revision = $4,
+                  consecutive_failures = consecutive_failures + 1,
+                  next_attempt_at = $5
+            WHERE id = $1 AND lease_owner = $2`,
+          [
+            source.id,
+            owner,
+            message,
+            String(revisionFor(source)),
+            new Date(
+              now() +
                 Math.min(
                   RETRY_MS,
-                  5 *
-                    60 *
-                    1000 *
-                    2 ** Math.min(latest.consecutiveFailures || 0, 3),
+                  5 * 60 * 1000 * 2 ** Math.min(
+                    claimed.previous.consecutive_failures || 0,
+                    3,
+                  ),
                 ),
-            },
-            { merge: true },
+            ),
+          ],
+        );
+        if (runCreated)
+          await client.query(
+            "DELETE FROM external_event_runs WHERE source_id = $1 AND id = $2",
+            [source.id, owner],
           );
       });
       logger.warn(
@@ -937,183 +991,208 @@ function createExternalEventService(
       );
     }
   }
+
   async function sync({ force = false } = {}) {
     if (running) return running;
     running = limitedSettled(SOURCES, 3, (source) => syncOne(source, force))
       .then((results) => {
         for (const result of results)
-          if (result.status === "rejected") {
-            logger.warn(
-              "[events] Refresh unavailable: " + result.reason.message,
-            );
-          }
+          if (result.status === "rejected")
+            logger.warn("[events] Refresh unavailable: " + result.reason.message);
       })
       .finally(() => {
         running = null;
       });
     return running;
   }
+
   async function read(bounds) {
-    const snapshots = await Promise.all(
-      SOURCES.map((source) => sourceRefs.doc(source.id).get()),
+    const { rows } = await pool.query(
+      "SELECT * FROM external_event_sources WHERE id = ANY($1::text[])",
+      [SOURCES.map((source) => source.id)],
     );
-    const events = [],
+    const saved = sourceMap(rows),
+      events = [],
       statuses = [];
-    await Promise.all(
-      snapshots.map(async (snapshot, index) => {
-        const source = SOURCES[index],
-          data = snapshot.data() || {};
-        statuses[index] = {
-          id: source.id,
-          name: source.name,
-          area: source.area,
-          ready: Boolean(data.activeRunId),
-          refreshing: data.leaseUntil > now(),
-          lastSuccessAt: data.lastSuccessAt
-            ? new Date(data.lastSuccessAt).toISOString()
-            : null,
-          stale:
-            Boolean(data.lastError) ||
-            !data.lastSuccessAt ||
-            now() - data.lastSuccessAt > 24 * 60 * 60 * 1000,
-          stats: data.stats || null,
-        };
-        if (!data.activeRunId) return;
-        const venues = await sourceRefs
-          .doc(source.id)
-          .collection("runs")
-          .doc(data.activeRunId)
-          .collection("venues")
-          .where("latitude", ">=", bounds.minLat)
-          .where("latitude", "<=", bounds.maxLat)
-          .get();
-        for (const doc of venues.docs) {
-          const venue = doc.data();
-          if (!Array.isArray(venue.sessions)) continue;
-          for (const item of venue.sessions)
-            events.push({
-              ...item,
-              venueId: venue.venueId,
-              venueName: venue.venueName,
-              location: venue.location,
-              coordinate: {
-                latitude: venue.latitude,
-                longitude: venue.longitude,
-              },
-              refreshedAt: statuses[index].lastSuccessAt,
-              stale: statuses[index].stale,
-            });
-        }
-      }),
-    );
+    for (const [index, source] of SOURCES.entries()) {
+      const row = saved.get(source.id),
+        status = sourceStatus(source, row, now());
+      statuses[index] = {
+        id: status.id,
+        name: status.name,
+        area: status.area,
+        ready: status.ready,
+        refreshing: status.refreshing,
+        lastSuccessAt: status.lastSuccessAt,
+        stale: status.stale,
+        stats: status.stats,
+      };
+      if (!row?.active_run_id) continue;
+      const { rows: venues } = await pool.query(
+        `SELECT venue_id, venue_name, location, latitude, longitude, sessions
+           FROM external_event_venues
+          WHERE source_id = $1 AND run_id = $2
+            AND latitude BETWEEN $3 AND $4
+          ORDER BY chunk_id`,
+        [source.id, row.active_run_id, bounds.minLat, bounds.maxLat],
+      );
+      for (const venue of venues) {
+        for (const item of json(venue.sessions) || [])
+          events.push({
+            ...item,
+            venueId: venue.venue_id,
+            venueName: venue.venue_name,
+            location: venue.location,
+            coordinate: {
+              latitude: venue.latitude,
+              longitude: venue.longitude,
+            },
+            refreshedAt: status.lastSuccessAt,
+            stale: status.stale,
+          });
+      }
+    }
     return { events, sources: statuses };
   }
+
   async function readMapSummaries(
     bounds,
     cells,
     budget = { remainingDocs: 6000, remainingBytes: 6 * 1024 * 1024 },
   ) {
     if (bounds.fresh || !mapMetadata || mapMetadata.expires <= now()) {
-      const promise = Promise.all(
-        SOURCES.map((source) => sourceRefs.doc(source.id).get()),
-      );
+      const promise = pool
+        .query(
+          "SELECT * FROM external_event_sources WHERE id = ANY($1::text[])",
+          [SOURCES.map((source) => source.id)],
+        )
+        .then(({ rows }) => sourceMap(rows));
       mapMetadata = { expires: now() + 40000, promise };
       promise.catch(() => {
         mapMetadata = null;
       });
     }
-    const snapshots = await mapMetadata.promise;
-    const sources = [],
+    const saved = await mapMetadata.promise,
+      sources = [],
       records = [];
-    // Sequential sources keep the database read budget bounded across providers.
-    for (let index = 0; index < SOURCES.length; index++) {
-      const source = SOURCES[index],
-        data = snapshots[index].data() || {};
-      const ready = Boolean(data.activeRunId) && data.mapSchemaVersion === 2;
-      const status = {
-        id: source.id,
-        name: source.name,
-        area: source.area,
-        ready,
-        refreshing: data.leaseUntil > now() || (!ready && !data.lastError),
-        lastSuccessAt: data.lastSuccessAt
-          ? new Date(data.lastSuccessAt).toISOString()
-          : null,
-        stale:
-          Boolean(data.lastError) ||
-          !data.lastSuccessAt ||
-          now() - data.lastSuccessAt > 24 * 60 * 60 * 1000,
-        stats: data.stats
-          ? {
-              venues: data.stats.venues ?? null,
-              sessions: data.stats.sessions ?? null,
-              unverified: data.stats.unverified ?? null,
-            }
-          : null,
-        importRevision: data.importRevision ?? null,
-        mapDocuments: 0,
-        mapState: ready ? "outsideCells" : "notReady",
-      };
+    for (const source of SOURCES) {
+      const row = saved.get(source.id),
+        base = sourceStatus(source, row, now()),
+        ready = Boolean(row?.active_run_id) && base.mapReady,
+        status = {
+          id: base.id,
+          name: base.name,
+          area: base.area,
+          ready,
+          refreshing: base.refreshing || (!ready && !row?.last_error),
+          lastSuccessAt: base.lastSuccessAt,
+          stale: base.stale,
+          stats: base.stats
+            ? {
+                venues: base.stats.venues ?? null,
+                sessions: base.stats.sessions ?? null,
+                unverified: base.stats.unverified ?? null,
+              }
+            : null,
+          importRevision: base.importRevision,
+          mapDocuments: 0,
+          mapState: ready ? "outsideCells" : "notReady",
+        };
       sources.push(status);
       if (
         !ready ||
-        (Array.isArray(data.mapCells) &&
-          !data.mapCells.some((cell) => cells.includes(cell)))
+        !(row.map_cells || []).some((cell) => cells.includes(cell))
       )
         continue;
-      const docs = await readCells(
-        sourceRefs
-          .doc(source.id)
-          .collection("runs")
-          .doc(data.activeRunId)
-          .collection("mapSummaries"),
-        cells,
-        null,
-        budget,
-      );
-      status.mapDocuments = docs.length;
-      status.mapState = docs.length ? "loaded" : "noMapDocuments";
-      for (const doc of docs)
-        records.push({
-          ...doc.data(),
-          sourceId: source.id,
-          sourceName: source.name,
-          stale: status.stale,
-          ref: {
+      let after = "";
+      for (;;) {
+        const size = Math.min(100, budget.remainingDocs + 1);
+        const { rows } = await pool.query(
+          `SELECT chunk_id, venue_id, venue_name, location, latitude,
+                  longitude, map_cell, sessions
+             FROM external_event_venues
+            WHERE source_id = $1 AND run_id = $2
+              AND map_cell = ANY($3::text[]) AND chunk_id > $4
+            ORDER BY chunk_id
+            LIMIT $5`,
+          [
+            source.id,
+            row.active_run_id,
+            cells,
+            after,
+            Math.max(1, size),
+          ],
+        );
+        let stop = false;
+        for (const record of rows) {
+          const bytes = Buffer.byteLength(JSON.stringify(record), "utf8");
+          budget.remainingDocs--;
+          budget.remainingBytes -= bytes;
+          if (budget.remainingDocs < 0 || budget.remainingBytes < 0)
+            throw Object.assign(
+              new Error(
+                "There are too many places in this area. Choose 2 km or 500 m, or move the map and search again.",
+              ),
+              { status: 422 },
+            );
+          status.mapDocuments++;
+          records.push({
+            venueId: record.venue_id,
+            venueName: record.venue_name,
+            location: record.location,
+            latitude: record.latitude,
+            longitude: record.longitude,
+            mapCell: record.map_cell,
+            sessions: json(record.sessions) || [],
             sourceId: source.id,
-            runId: data.activeRunId,
-            chunkId: doc.id,
-          },
-        });
+            sourceName: source.name,
+            stale: status.stale,
+            ref: {
+              sourceId: source.id,
+              runId: row.active_run_id,
+              chunkId: record.chunk_id,
+            },
+          });
+          after = record.chunk_id;
+        }
+        if (rows.length < size) break;
+        if (budget.remainingDocs <= 0 || budget.remainingBytes <= 0) {
+          stop = true;
+          break;
+        }
+        if (stop) break;
+      }
+      status.mapState = status.mapDocuments ? "loaded" : "noMapDocuments";
     }
     return { records, sources };
   }
+
   async function loadMapSessions(reference) {
     if (!SOURCES.some((source) => source.id === reference.sourceId))
       throw new Error("Unknown community calendar.");
-    const snapshot = await sourceRefs
-      .doc(reference.sourceId)
-      .collection("runs")
-      .doc(reference.runId)
-      .collection("venues")
-      .doc(reference.chunkId)
-      .get();
-    if (!snapshot.exists)
+    const { rows } = await pool.query(
+      `SELECT venue_id, venue_name, location, latitude, longitude, sessions
+         FROM external_event_venues
+        WHERE source_id = $1 AND run_id = $2 AND chunk_id = $3`,
+      [reference.sourceId, reference.runId, reference.chunkId],
+    );
+    const venue = rows[0];
+    if (!venue)
       throw Object.assign(
         new Error(
           "This calendar has updated. Refresh the map and select the place again.",
         ),
         { status: 409 },
       );
-    const venue = snapshot.data();
-    return (venue.sessions || []).map((item) => ({
+    return (json(venue.sessions) || []).map((item) => ({
       ...item,
-      venueId: venue.venueId,
-      venueName: venue.venueName,
+      venueId: venue.venue_id,
+      venueName: venue.venue_name,
       location: venue.location,
       coordinate: { latitude: venue.latitude, longitude: venue.longitude },
     }));
   }
+
   function start() {
     if (timer) return () => {};
     void sync();

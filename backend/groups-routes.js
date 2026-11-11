@@ -1,5 +1,4 @@
 const { createHash } = require("node:crypto");
-const { Timestamp, FieldPath } = require("firebase-admin/firestore");
 const { mapCellFor } = require("./map-geography");
 
 const ALLOWED_INTERESTS = new Set([
@@ -101,6 +100,9 @@ const INACTIVE_DAYS = 45;
 const WARNING_DAYS = 7;
 const validId = (v) =>
   typeof v === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(v);
+const validUuid = (v) =>
+  typeof v === "string" &&
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
 const hash = (...parts) =>
   createHash("sha256").update(JSON.stringify(parts)).digest("hex");
 const fail = (status, message) => {
@@ -113,153 +115,246 @@ const normalize = (v) =>
     .toLowerCase()
     .replace(/[^\p{L}\p{N}]+/gu, " ")
     .trim();
-const milliseconds = (v) => (v?.toMillis ? v.toMillis() : Date.parse(v || ""));
-const membershipRef = (db, gid, uid) =>
-  db.collection("groupMemberships").doc(hash(gid, uid));
-
-function blockRefs(db, uid, peer) {
-  return [
-    db.collection("contactBlocks").doc(hash(uid, peer)),
-    db.collection("contactBlocks").doc(hash(peer, uid)),
-  ];
-}
-
-async function assertCanContact(db, uid, peer, transaction) {
-  const docs = await Promise.all(
-    blockRefs(db, uid, peer).map((ref) =>
-      transaction ? transaction.get(ref) : ref.get(),
-    ),
+const milliseconds = (v) => {
+  if (v instanceof Date) return v.getTime();
+  return Date.parse(v || "");
+};
+const iso = (value) => {
+  const ms = milliseconds(value);
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+};
+const expiry = (activity, eventEnd = 0) =>
+  new Date(
+    Math.max(milliseconds(activity) || 0, eventEnd || 0) +
+      INACTIVE_DAYS * DAY,
   );
-  if (docs.some((doc) => doc.exists))
-    fail(403, "Direct contact between these members is blocked.");
+
+async function transaction(db, work) {
+  const client = await db.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await work(client);
+    await client.query("COMMIT");
+    return result;
+  } catch (error) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {}
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
-function groupData(snapshot) {
-  if (!snapshot.exists) fail(404, "Group not found.");
-  const data = snapshot.data();
-  if (data.status !== "active") fail(410, "This group has closed.");
-  return data;
+async function identity(client, req, message = "Your profile is not ready.") {
+  if (!validUuid(req.userId) || typeof req.account?.uid !== "string")
+    fail(401, "Please sign in.");
+  const { rows } = await client.query(
+    "SELECT id, firebase_uid, full_name, area FROM users WHERE id = $1 AND firebase_uid = $2",
+    [req.userId, req.account.uid],
+  );
+  if (!rows.length) fail(404, message);
+  return rows[0];
 }
 
-function memberData(snapshot) {
-  if (!snapshot.exists) fail(403, "Join this group to participate.");
-  return snapshot.data();
+function groupData(row) {
+  if (!row) fail(404, "Group not found.");
+  if (row.status === "deleted") fail(404, "Group not found.");
+  if (row.status !== "active") fail(410, "This group has closed.");
+  return row;
 }
 
-function expiry(activity, eventEnd = 0) {
-  return new Date(
-    Math.max(milliseconds(activity), eventEnd || 0) + INACTIVE_DAYS * DAY,
-  ).toISOString();
+function groupView(row) {
+  return {
+    name: row.name,
+    area: row.area,
+    description: row.description,
+    interests: row.interests || [],
+    creatorId: row.creator_uid,
+    createdAt: iso(row.created_at),
+    lastActivityAt: iso(row.last_activity_at),
+    lastEventEnd: iso(row.last_event_end),
+    deleteAfter: iso(row.delete_after),
+    memberCount: Number(row.member_count),
+    status: row.status,
+    sequence: Number(row.sequence),
+    revision: Number(row.revision),
+    preview: row.preview,
+  };
 }
 
-function futureEnd(docs, now) {
-  return docs.reduce((end, doc) => {
-    const event = doc.data();
-    const value = milliseconds(event.endsAt);
-    return event.status === "published" && value > now
-      ? Math.max(end, value)
-      : end;
-  }, 0);
+function memberView(row) {
+  if (!row) return null;
+  return {
+    uid: row.firebase_uid,
+    joinedAt: iso(row.joined_at),
+    muted: row.muted,
+    hiddenMembers: row.hidden_members || [],
+    lastReadSequence: Number(row.last_read_sequence),
+  };
 }
 
-function summary(id, g, member, now) {
-  const deleteAfter = g.deleteAfter;
+function summary(id, group, member, now) {
+  const deleteAfter = group.deleteAfter;
   return {
     id,
-    name: g.name,
-    area: g.area,
-    description: g.description,
-    interests: g.interests,
-    memberCount: g.memberCount,
-    createdAt: g.createdAt,
-    lastActivityAt: g.lastActivityAt,
+    name: group.name,
+    area: group.area,
+    description: group.description,
+    interests: group.interests,
+    memberCount: group.memberCount,
+    createdAt: group.createdAt,
+    lastActivityAt: group.lastActivityAt,
     deleteAfter,
     warning: milliseconds(deleteAfter) <= now + WARNING_DAYS * DAY,
-    preview: member ? g.preview || "Start a conversation" : "",
-    revision: g.revision || 0,
-    sequence: g.sequence || 0,
+    preview: member ? group.preview || "Start a conversation" : "",
+    revision: group.revision || 0,
+    sequence: group.sequence || 0,
     joined: !!member,
     muted: !!member?.muted,
     hiddenMembers: member?.hiddenMembers || [],
     unreadCount:
       member && !member.muted
-        ? Math.max(0, (g.sequence || 0) - (member.lastReadSequence || 0))
+        ? Math.max(0, (group.sequence || 0) - (member.lastReadSequence || 0))
         : 0,
   };
 }
 
-// Memberships and events are outside the group document and must be removed too.
-// The group is locked as "deleting" before this function is called.
+async function loadGroup(client, id, uid, { lock = false } = {}) {
+  if (!validUuid(id)) fail(400, "Invalid group.");
+  const suffix = lock ? " FOR UPDATE OF g" : "";
+  const { rows: groupRows } = await client.query(
+    `SELECT g.*, u.firebase_uid AS creator_uid
+       FROM community_groups g
+       LEFT JOIN users u ON u.id = g.created_by
+      WHERE g.id = $1${suffix}`,
+    [id],
+  );
+  const group = groupData(groupRows[0]);
+  const { rows: memberRows } = await client.query(
+    `SELECT m.joined_at, m.muted, m.hidden_members, m.last_read_sequence,
+            u.firebase_uid
+       FROM group_memberships m
+       JOIN users u ON u.id = m.user_id
+      WHERE m.group_id = $1 AND m.user_id = $2 AND m.status = 'active'`,
+    [id, uid],
+  );
+  return {
+    id,
+    group: groupView(group),
+    member: memberView(memberRows[0]),
+  };
+}
+
+async function currentIdentity(client, firebaseUid) {
+  if (typeof firebaseUid !== "string" || !firebaseUid || firebaseUid.length > 128)
+    fail(401, "Please sign in.");
+  const { rows } = await client.query(
+    "SELECT id, firebase_uid FROM users WHERE firebase_uid = $1",
+    [firebaseUid],
+  );
+  return rows[0] || null;
+}
+
+async function futureEnd(client, groupId, now, exceptId = null) {
+  const { rows } = await client.query(
+    `SELECT COALESCE(MAX(ends_at), 'epoch'::timestamptz) AS latest_end
+       FROM group_events
+      WHERE group_id = $1 AND status = 'published' AND ends_at > $2
+        AND ($3::text IS NULL OR id <> $3)`,
+    [groupId, new Date(now), exceptId],
+  );
+  return milliseconds(rows[0]?.latest_end) || 0;
+}
+
+function activityValues(group, now, lastEventEnd = milliseconds(group.lastEventEnd) || 0) {
+  const lastActivityAt = new Date(
+    Math.max(now, milliseconds(group.lastActivityAt) || 0),
+  );
+  return {
+    lastActivityAt,
+    lastEventEnd: lastEventEnd ? new Date(lastEventEnd) : null,
+    deleteAfter: expiry(lastActivityAt, lastEventEnd),
+  };
+}
+
+async function purgeGroupTx(client, id, now = Date.now()) {
+  await client.query(
+    `UPDATE community_groups
+        SET status = 'deleted', created_by = NULL, name = '[deleted]',
+            description = '', area = '', meeting_details = '', image_url = NULL,
+            interests = '{}', member_count = 0, last_event_end = NULL,
+            preview = '', delete_after = $2, updated_at = $2
+      WHERE id = $1`,
+    [id, new Date(now)],
+  );
+  await client.query("DELETE FROM group_events WHERE group_id = $1", [id]);
+  await client.query("DELETE FROM group_messages WHERE group_id = $1", [id]);
+  await client.query("DELETE FROM group_reports WHERE group_id = $1", [id]);
+  await client.query("DELETE FROM group_activities WHERE group_id = $1", [id]);
+  await client.query("DELETE FROM group_memberships WHERE group_id = $1", [id]);
+}
+
 async function purgeGroup(db, id) {
-  for (const collection of ["groupMemberships", "events"]) {
-    for (;;) {
-      const page = await db
-        .collection(collection)
-        .where("groupId", "==", id)
-        .limit(100)
-        .get();
-      if (page.empty) break;
-      for (const doc of page.docs) await db.recursiveDelete(doc.ref);
-    }
-  }
-  const ref = db.collection("groups").doc(id);
-  // Keep the locked parent until message cleanup finishes, so partial failures retry safely.
-  await db.recursiveDelete(ref.collection("messages"));
-  await ref.delete();
+  if (!validUuid(id)) fail(400, "Invalid group.");
+  return transaction(db, (client) => purgeGroupTx(client, id));
 }
 
 async function sweepInactiveGroups(db, now = Date.now()) {
-  // A stable cursor lets later groups progress even when one deletion fails.
-  let cursor;
+  let removed = 0;
+  let cursorTime = null;
+  let cursorId = null;
   for (;;) {
-    let query = db
-      .collection("groups")
-      .where("deleteAfter", "<=", new Date(now).toISOString())
-      .orderBy("deleteAfter")
-      .orderBy(FieldPath.documentId())
-      .limit(30);
-    if (cursor) query = query.startAfter(...cursor);
-    const page = await query.get();
-    if (page.empty) break;
-    const last = page.docs[page.docs.length - 1];
-    cursor = [last.data().deleteAfter, last.id];
-    for (const doc of page.docs) {
+    const candidates = await db.query(
+      `SELECT id, delete_after
+         FROM community_groups
+        WHERE status IN ('active', 'closed') AND delete_after <= $1
+          AND ($2::timestamptz IS NULL OR (delete_after, id) > ($2, $3::uuid))
+        ORDER BY delete_after, id
+        LIMIT 30`,
+      [new Date(now), cursorTime, cursorId],
+    );
+    if (!candidates.rows.length) break;
+    const lastCandidate = candidates.rows[candidates.rows.length - 1];
+    cursorTime = lastCandidate.delete_after;
+    cursorId = lastCandidate.id;
+    for (const { id } of candidates.rows) {
       try {
-        const remove = await db.runTransaction(async (tx) => {
-          const current = await tx.get(doc.ref);
-          if (!current.exists) return false;
-          const g = current.data();
-          if (g.status === "deleting") {
-            tx.set(db.collection("deletedGroupIds").doc(doc.id), {
-              deletedAt: new Date(now).toISOString(),
-            });
-            return true;
-          }
-          const events = await tx.get(
-            db.collection("events").where("groupId", "==", doc.id),
+        const didPurge = await transaction(db, async (client) => {
+          const { rows } = await client.query(
+            `SELECT g.*, u.firebase_uid AS creator_uid
+               FROM community_groups g
+               LEFT JOIN users u ON u.id = g.created_by
+              WHERE g.id = $1
+              FOR UPDATE OF g`,
+            [id],
           );
-          const end = futureEnd(events.docs, now);
+          const row = rows[0];
+          if (!row || !["active", "closed"].includes(row.status)) return false;
+          const group = groupView(row);
+          const end = await futureEnd(client, id, now);
           const deadline = expiry(
-            g.lastActivityAt || g.createdAt,
-            Math.max(end, milliseconds(g.lastEventEnd) || 0),
+            group.lastActivityAt || group.createdAt,
+            Math.max(end, milliseconds(group.lastEventEnd) || 0),
           );
           if (milliseconds(deadline) > now) {
-            tx.update(doc.ref, { deleteAfter: deadline });
+            await client.query(
+              "UPDATE community_groups SET delete_after = $2 WHERE id = $1",
+              [id, deadline],
+            );
             return false;
           }
-          tx.set(db.collection("deletedGroupIds").doc(doc.id), {
-            deletedAt: new Date(now).toISOString(),
-          });
-          tx.update(doc.ref, { status: "deleting" });
+          await purgeGroupTx(client, id, now);
           return true;
         });
-        if (remove) await purgeGroup(db, doc.id);
+        if (didPurge) removed++;
       } catch (error) {
-        console.error("Group cleanup failed:", doc.id, error.message);
+        console.error("Group cleanup failed:", id, error.message);
       }
     }
-    if (page.size < 30) break;
+    if (candidates.rows.length < 30) break;
   }
+  return removed;
 }
 
 function startGroupCleanup(db) {
@@ -282,10 +377,6 @@ function startGroupCleanup(db) {
 }
 
 function installGroupRoutes(app, db, { clock = Date.now } = {}) {
-  const groups = db.collection("groups");
-  const memberships = db.collection("groupMemberships");
-  const events = db.collection("events");
-  const users = db.collection("users");
   const route = (handler) => async (req, res, next) => {
     try {
       await handler(req, res);
@@ -295,61 +386,45 @@ function installGroupRoutes(app, db, { clock = Date.now } = {}) {
         : next(error);
     }
   };
-  function ref(id) {
-    if (!validId(id)) fail(400, "Invalid group.");
-    return groups.doc(id);
-  }
-  async function access(id, uid, tx) {
-    const reference = ref(id),
-      memberRef = membershipRef(db, id, uid);
-    const [g, m] = await Promise.all([
-      tx ? tx.get(reference) : reference.get(),
-      tx ? tx.get(memberRef) : memberRef.get(),
-    ]);
-    return {
-      ref: reference,
-      memberRef,
-      group: groupData(g),
-      member: m.exists ? m.data() : null,
-    };
-  }
-  const text = (v, min, max, label) => {
-    if (typeof v !== "string" || v.trim().length < min || v.trim().length > max)
-      fail(400, label);
-    return v.trim();
+  const parseGroupId = (id) => {
+    if (!validUuid(id)) fail(400, "Invalid group.");
+    return id.toLowerCase();
   };
-  function activityPatch(
-    g,
-    now,
-    lastEventEnd = milliseconds(g.lastEventEnd) || 0,
-  ) {
-    const lastActivityAt = new Date(
-      Math.max(now, milliseconds(g.lastActivityAt) || 0),
-    ).toISOString();
-    return {
-      lastActivityAt,
-      lastEventEnd: lastEventEnd ? new Date(lastEventEnd).toISOString() : null,
-      deleteAfter: expiry(lastActivityAt, lastEventEnd),
-    };
+  const text = (value, min, max, label) => {
+    if (
+      typeof value !== "string" ||
+      value.trim().length < min ||
+      value.trim().length > max
+    )
+      fail(400, label);
+    return value.trim();
+  };
+  async function access(client, id, uid, lock = false) {
+    return loadGroup(client, parseGroupId(id), uid, { lock });
   }
 
   app.get(
     "/api/groups/mine",
     route(async (req, res) => {
-      const mine = await memberships.where("uid", "==", req.account.uid).get();
-      const values = await Promise.all(
-        mine.docs.map(async (doc) => {
-          const m = doc.data(),
-            g = await groups.doc(m.groupId).get();
-          return g.exists && g.data().status === "active"
-            ? summary(g.id, g.data(), m, clock())
-            : null;
-        }),
+      const { rows } = await db.query(
+        `SELECT g.*, creator.firebase_uid AS creator_uid,
+                m.joined_at, m.muted, m.hidden_members, m.last_read_sequence
+           FROM group_memberships m
+           JOIN community_groups g ON g.id = m.group_id
+           LEFT JOIN users creator ON creator.id = g.created_by
+          WHERE m.user_id = $1 AND m.status = 'active' AND g.status = 'active'
+          ORDER BY g.last_activity_at DESC, g.id`,
+        [req.userId],
       );
       res.json({
-        groups: values
-          .filter(Boolean)
-          .sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt)),
+        groups: rows.map((row) =>
+          summary(
+            row.id,
+            groupView(row),
+            memberView({ ...row, firebase_uid: req.account.uid }),
+            clock(),
+          ),
+        ),
       });
     }),
   );
@@ -362,7 +437,6 @@ function installGroupRoutes(app, db, { clock = Date.now } = {}) {
         .split(/\s+/)
         .filter(Boolean);
       const area = normalize(req.query.area).slice(0, 120);
-      // An unchecked interest filter sends "". It must mean no filter, not [""].
       const tags = new Set(
         (typeof req.query.interests === "string"
           ? req.query.interests.split("|").slice(0, 150)
@@ -372,40 +446,68 @@ function installGroupRoutes(app, db, { clock = Date.now } = {}) {
           .filter(Boolean),
       );
       let cursor = req.query.cursor;
-      if (cursor !== undefined && !validId(cursor))
+      if (cursor !== undefined && !validUuid(cursor))
         fail(400, "Invalid group page.");
+      if (cursor) cursor = cursor.toLowerCase();
+      const user = await identity(db, req);
       const found = [];
-      let more = true,
-        scanned = 0;
+      let more = true;
+      let scanned = 0;
       while (found.length < 20 && more && scanned < 1000) {
-        let query = groups
-          .where("status", "==", "active")
-          .orderBy(FieldPath.documentId())
-          .limit(100);
-        if (cursor) query = query.startAfter(cursor);
-        const page = await query.get();
-        more = page.size === 100;
-        for (let i = 0; i < page.docs.length; i++) {
-          const doc = page.docs[i],
-            g = doc.data();
-          cursor = doc.id;
+        const { rows } = await db.query(
+          `SELECT g.*, u.firebase_uid AS creator_uid
+             FROM community_groups g
+             LEFT JOIN users u ON u.id = g.created_by
+            WHERE g.status = 'active' AND ($1::uuid IS NULL OR g.id > $1)
+            ORDER BY g.id
+            LIMIT 100`,
+          [cursor || null],
+        );
+        more = rows.length === 100;
+        for (let i = 0; i < rows.length; i++) {
+          const row = rows[i];
+          const group = groupView(row);
+          cursor = row.id;
           scanned++;
           const searchable = normalize(
-            [g.name, g.description, g.area, ...(g.interests || [])].join(" "),
+            [group.name, group.description, group.area, ...(group.interests || [])].join(
+              " ",
+            ),
           );
           if (
             !words.every((word) => searchable.includes(word)) ||
-            (area && !normalize(g.area).includes(area)) ||
-            (tags.size && !g.interests?.some((tag) => tags.has(normalize(tag))))
+            (area && !normalize(group.area).includes(area)) ||
+            (tags.size &&
+              !group.interests?.some((tag) => tags.has(normalize(tag))))
           )
             continue;
-          const m = await membershipRef(db, doc.id, req.account.uid).get();
-          found.push(summary(doc.id, g, m.exists ? m.data() : null, clock()));
+          const { rows: membership } = user
+            ? await db.query(
+                `SELECT joined_at, muted, hidden_members, last_read_sequence
+                   FROM group_memberships
+                  WHERE group_id = $1 AND user_id = $2 AND status = 'active'`,
+                [row.id, user.id],
+              )
+            : { rows: [] };
+          found.push(
+            summary(
+              row.id,
+              group,
+              membership[0]
+                ? memberView({
+                    ...membership[0],
+                    firebase_uid: req.account?.uid,
+                  })
+                : null,
+              clock(),
+            ),
+          );
           if (found.length === 20) {
-            more = i < page.docs.length - 1 || more;
+            more = i < rows.length - 1 || more;
             break;
           }
         }
+        if (rows.length === 0) more = false;
       }
       res.json({ groups: found, nextCursor: more ? cursor : null });
     }),
@@ -414,10 +516,9 @@ function installGroupRoutes(app, db, { clock = Date.now } = {}) {
   app.post(
     "/api/groups",
     route(async (req, res) => {
-      const body = req.body || {},
-        uid = req.account.uid;
-      // Client supplies a random ID so retries cannot create duplicate groups.
-      const reference = ref(body.id);
+      const body = req.body || {};
+      if (!validUuid(body.id)) fail(400, "Invalid group.");
+      const id = body.id.toLowerCase();
       const name = text(
         body.name,
         3,
@@ -431,67 +532,105 @@ function installGroupRoutes(app, db, { clock = Date.now } = {}) {
       )
         fail(400, "Choose exactly one activity for this group.");
       const interests = [body.interests[0]];
-      const result = await db.runTransaction(async (tx) => {
-        const [existing, profile, deleted] = await Promise.all([
-          tx.get(reference),
-          tx.get(users.doc(uid)),
-          tx.get(db.collection("deletedGroupIds").doc(reference.id)),
-        ]);
-        if (!profile.exists)
-          fail(404, "Your profile is not ready. Open Profile and try again.");
-        if (existing.exists) {
-          const g = groupData(existing);
+      const result = await transaction(db, async (client) => {
+        const user = await identity(
+          client,
+          req,
+          "Your profile is not ready. Open Profile and try again.",
+        );
+        let { rows } = await client.query(
+          `SELECT g.*, u.firebase_uid AS creator_uid
+             FROM community_groups g
+             LEFT JOIN users u ON u.id = g.created_by
+            WHERE g.id = $1
+            FOR UPDATE OF g`,
+          [id],
+        );
+        if (rows[0]) {
+          const existing = rows[0];
+          if (existing.status !== "active") {
+            if (existing.status === "deleted" || existing.status === "deleting")
+              fail(410, "This group was deleted. Start a new group instead.");
+            groupData(existing);
+          }
           if (
-            g.creatorId !== uid ||
-            g.name !== name ||
-            JSON.stringify(g.interests) !== JSON.stringify(interests)
+            existing.created_by !== user.id ||
+            existing.name !== name ||
+            JSON.stringify(existing.interests) !== JSON.stringify(interests)
           )
             fail(409, "Group ID already used.");
-          return g;
+          return groupView(existing);
         }
-        if (deleted.exists)
-          fail(410, "This group was deleted. Start a new group instead.");
-        // There is no location field in this form. Use a saved profile area if
-        // available; Ontario is a broad fallback, not the user's GPS location.
-        const profileArea = profile.data().area;
+        const now = new Date(clock());
         const area =
-          typeof profileArea === "string" && profileArea.trim()
-            ? profileArea.trim().slice(0, 120)
+          typeof user.area === "string" && user.area.trim()
+            ? user.area.trim().slice(0, 120)
             : "Ontario";
-        const now = new Date(clock()).toISOString();
-        const g = {
-          name,
-          area,
-          description: "",
-          interests,
-          creatorId: uid,
-          createdAt: now,
-          lastActivityAt: now,
-          lastEventEnd: null,
-          deleteAfter: expiry(now),
-          memberCount: 1,
-          status: "active",
-          sequence: 0,
-          revision: 0,
-          preview: "",
-        };
-        tx.create(reference, g);
-        tx.create(membershipRef(db, reference.id, uid), {
-          groupId: reference.id,
-          uid,
-          joinedAt: now,
-          muted: false,
-          hiddenMembers: [],
-          lastReadSequence: 0,
+        const { rows: inserted } = await client.query(
+          `INSERT INTO community_groups
+             (id, created_by, name, description, area, visibility, created_at,
+              updated_at, status, member_count, interests, last_activity_at,
+              delete_after, preview, revision, sequence)
+           VALUES ($1, $2, $3, '', $4, 'public', $5, $5, 'active', 1, $6, $5,
+                   $7, '', 0, 0)
+           ON CONFLICT (id) DO NOTHING
+           RETURNING *`,
+          [id, user.id, name, area, now, interests, expiry(now)],
+        );
+        if (!inserted.length) {
+          const conflict = await client.query(
+            `SELECT g.*, u.firebase_uid AS creator_uid
+               FROM community_groups g
+               LEFT JOIN users u ON u.id = g.created_by
+              WHERE g.id = $1
+              FOR UPDATE OF g`,
+            [id],
+          );
+          const existing = conflict.rows[0];
+          if (existing?.status !== "active") {
+            if (existing?.status === "deleted" || existing?.status === "deleting")
+              fail(410, "This group was deleted. Start a new group instead.");
+            groupData(existing);
+          }
+          if (
+            existing?.created_by !== user.id ||
+            existing?.name !== name ||
+            JSON.stringify(existing?.interests) !== JSON.stringify(interests)
+          )
+            fail(409, "Group ID already used.");
+          return groupView(existing);
+        }
+        await client.query(
+          `INSERT INTO group_memberships
+             (group_id, user_id, role, status, joined_at, muted,
+              hidden_members, last_read_sequence)
+           VALUES ($1, $2, 'owner', 'active', $3, false, '{}', 0)
+           ON CONFLICT (group_id, user_id) DO UPDATE
+             SET role = 'owner', status = 'active', joined_at = EXCLUDED.joined_at`,
+          [id, user.id, now],
+        );
+        return groupView({
+          ...inserted[0],
+          creator_uid: user.firebase_uid,
         });
-        return g;
       });
-      const member = await membershipRef(db, reference.id, uid).get();
+      const user = await identity(db, req);
+      const { rows: membership } = await db.query(
+        `SELECT joined_at, muted, hidden_members, last_read_sequence
+           FROM group_memberships
+          WHERE group_id = $1 AND user_id = $2 AND status = 'active'`,
+        [id, user.id],
+      );
       res.json({
         group: summary(
-          reference.id,
+          id,
           result,
-          member.exists ? member.data() : null,
+          membership[0]
+            ? memberView({
+                ...membership[0],
+                firebase_uid: user.firebase_uid,
+              })
+            : null,
           clock(),
         ),
       });
@@ -501,9 +640,10 @@ function installGroupRoutes(app, db, { clock = Date.now } = {}) {
   app.get(
     "/api/groups/:id",
     route(async (req, res) => {
-      const value = await access(req.params.id, req.account.uid);
+      const user = await identity(db, req);
+      const value = await access(db, req.params.id, user?.id);
       res.json({
-        group: summary(value.ref.id, value.group, value.member, clock()),
+        group: summary(value.id, value.group, value.member, clock()),
         canDelete:
           value.group.creatorId === req.account.uid &&
           value.group.memberCount === 1 &&
@@ -515,20 +655,32 @@ function installGroupRoutes(app, db, { clock = Date.now } = {}) {
   app.post(
     "/api/groups/:id/join",
     route(async (req, res) => {
-      await db.runTransaction(async (tx) => {
-        const v = await access(req.params.id, req.account.uid, tx);
-        const profile = await tx.get(users.doc(req.account.uid));
-        if (!profile.exists) fail(404, "Your member profile is not ready.");
-        if (v.member) return;
-        tx.create(v.memberRef, {
-          groupId: v.ref.id,
-          uid: req.account.uid,
-          joinedAt: new Date(clock()).toISOString(),
-          muted: false,
-          hiddenMembers: [],
-          lastReadSequence: v.group.sequence,
-        });
-        tx.update(v.ref, { memberCount: v.group.memberCount + 1 });
+      await transaction(db, async (client) => {
+        const user = await identity(client, req, "Your member profile is not ready.");
+        const value = await access(client, req.params.id, user.id, true);
+        if (value.member) return;
+        await client.query(
+          `INSERT INTO group_memberships
+             (group_id, user_id, role, status, joined_at, muted,
+              hidden_members, last_read_sequence)
+           VALUES ($1, $2, 'member', 'active', $3, false, '{}', $4)
+           ON CONFLICT (group_id, user_id) DO UPDATE
+             SET role = 'member', status = 'active', joined_at = EXCLUDED.joined_at,
+                 muted = false, hidden_members = '{}',
+                 last_read_sequence = EXCLUDED.last_read_sequence`,
+          [
+            value.id,
+            user.id,
+            new Date(clock()),
+            value.group.sequence,
+          ],
+        );
+        await client.query(
+          `UPDATE community_groups
+              SET member_count = member_count + 1, updated_at = $2
+            WHERE id = $1`,
+          [value.id, new Date(clock())],
+        );
       });
       res.json({ joined: true });
     }),
@@ -537,33 +689,37 @@ function installGroupRoutes(app, db, { clock = Date.now } = {}) {
   app.post(
     "/api/groups/:id/leave",
     route(async (req, res) => {
-      await db.runTransaction(async (tx) => {
-        const v = await access(req.params.id, req.account.uid, tx);
-        if (!v.member) return;
-        const last = v.group.memberCount === 1;
-        const scheduled = last
-          ? await tx.get(events.where("groupId", "==", v.ref.id))
-          : null;
-        tx.delete(v.memberRef);
-        tx.update(v.ref, {
-          memberCount: Math.max(0, v.group.memberCount - 1),
-          ...(last
-            ? {
-                status: "closed",
-                lastEventEnd: null,
-                deleteAfter: expiry(v.group.lastActivityAt),
-              }
-            : {}),
-        });
-        if (scheduled)
-          for (const event of scheduled.docs) {
-            if (
-              event.data().status === "published" &&
-              milliseconds(event.data().endsAt) > clock()
-            ) {
-              tx.update(event.ref, { status: "cancelled" });
-            }
-          }
+      await transaction(db, async (client) => {
+        const user = await identity(client, req);
+        const value = await access(client, req.params.id, user.id, true);
+        if (!value.member) return;
+        const last = value.group.memberCount === 1;
+        if (last) {
+          await client.query(
+            `UPDATE group_events SET status = 'cancelled', updated_at = $2
+              WHERE group_id = $1 AND status = 'published' AND ends_at > $2`,
+            [value.id, new Date(clock())],
+          );
+        }
+        await client.query(
+          "DELETE FROM group_memberships WHERE group_id = $1 AND user_id = $2",
+          [value.id, user.id],
+        );
+        await client.query(
+          `UPDATE community_groups
+              SET member_count = GREATEST(0, member_count - 1),
+                  status = CASE WHEN $2 THEN 'closed' ELSE status END,
+                  last_event_end = CASE WHEN $2 THEN NULL ELSE last_event_end END,
+                  delete_after = CASE WHEN $2 THEN $3 ELSE delete_after END,
+                  updated_at = $4
+            WHERE id = $1`,
+          [
+            value.id,
+            last,
+            expiry(value.group.lastActivityAt),
+            new Date(clock()),
+          ],
+        );
       });
       res.json({ left: true });
     }),
@@ -572,30 +728,34 @@ function installGroupRoutes(app, db, { clock = Date.now } = {}) {
   app.post(
     "/api/groups/:id/delete",
     route(async (req, res) => {
-      const reference = ref(req.params.id);
-      const claimed = await db.runTransaction(async (tx) => {
-        const snapshot = await tx.get(reference);
-        if (!snapshot.exists) return false;
-        const g = snapshot.data();
-        if (g.creatorId !== req.account.uid || g.memberCount !== 1)
+      const id = parseGroupId(req.params.id);
+      const claimed = await transaction(db, async (client) => {
+        const user = await identity(client, req);
+        const { rows } = await client.query(
+          `SELECT * FROM community_groups WHERE id = $1 FOR UPDATE`,
+          [id],
+        );
+        const group = rows[0];
+        if (!group || group.status === "deleting" || group.status === "deleted")
+          return false;
+        if (
+          group.created_by !== user.id ||
+          Number(group.member_count) !== 1
+        )
           fail(
             403,
             "Only the creator can delete a group while they are its only member.",
           );
-        const m = await tx.get(
-          membershipRef(db, reference.id, req.account.uid),
+        const { rows: membership } = await client.query(
+          `SELECT 1 FROM group_memberships
+            WHERE group_id = $1 AND user_id = $2 AND status = 'active'`,
+          [id, user.id],
         );
-        memberData(m);
-        tx.set(db.collection("deletedGroupIds").doc(reference.id), {
-          deletedAt: new Date(clock()).toISOString(),
-        });
-        tx.update(reference, {
-          status: "deleting",
-          deleteAfter: new Date(clock()).toISOString(),
-        });
+        if (!membership.length) fail(403, "Join this group to participate.");
+        await purgeGroupTx(client, id, clock());
         return true;
       });
-      if (claimed) await purgeGroup(db, reference.id);
+      void claimed;
       res.json({ deleted: true });
     }),
   );
@@ -613,26 +773,47 @@ function installGroupRoutes(app, db, { clock = Date.now } = {}) {
           input.hiddenMemberId === req.account.uid)
       )
         fail(400, "Choose another member.");
-      await db.runTransaction(async (tx) => {
-        const v = await access(req.params.id, req.account.uid, tx);
-        if (!v.member) fail(403, "Join this group first.");
+      await transaction(db, async (client) => {
+        const user = await identity(client, req);
+        const value = await access(client, req.params.id, user.id, true);
+        if (!value.member) fail(403, "Join this group first.");
         if (
           input.clearHidden !== undefined &&
           typeof input.clearHidden !== "boolean"
         )
           fail(400, "Invalid message visibility setting.");
         const hidden = new Set(
-          input.clearHidden ? [] : v.member.hiddenMembers || [],
+          input.clearHidden ? [] : value.member.hiddenMembers || [],
         );
         if (input.hiddenMemberId)
           input.hidden
             ? hidden.add(input.hiddenMemberId)
             : hidden.delete(input.hiddenMemberId);
         if (hidden.size > 1000) fail(400, "Too many hidden members.");
-        tx.update(v.memberRef, {
-          hiddenMembers: [...hidden],
-          muted: input.muted ?? v.member.muted,
-        });
+        const hiddenMembers = [...hidden];
+        await client.query(
+          `UPDATE group_memberships
+              SET hidden_members = $3, muted = $4
+            WHERE group_id = $1 AND user_id = $2`,
+          [value.id, user.id, hiddenMembers, input.muted ?? value.member.muted],
+        );
+        await client.query(
+          `DELETE FROM group_hidden_members
+            WHERE group_id = $1 AND user_id = $2`,
+          [value.id, user.id],
+        );
+        if (hiddenMembers.length) {
+          await client.query(
+            `INSERT INTO group_hidden_members (group_id, user_id, hidden_user_id)
+             SELECT $1, $2, m.user_id
+               FROM users u
+               JOIN group_memberships m ON m.user_id = u.id
+              WHERE m.group_id = $1 AND m.status = 'active'
+                AND u.firebase_uid = ANY($3::text[])
+             ON CONFLICT DO NOTHING`,
+            [value.id, user.id, hiddenMembers],
+          );
+        }
       });
       res.json({ saved: true });
     }),
@@ -641,35 +822,45 @@ function installGroupRoutes(app, db, { clock = Date.now } = {}) {
   app.get(
     "/api/groups/:id/members",
     route(async (req, res) => {
-      const v = await access(req.params.id, req.account.uid);
-      if (!v.member) fail(403, "Join this group first.");
-      let query = memberships
-        .where("groupId", "==", v.ref.id)
-        .orderBy(FieldPath.documentId())
-        .limit(51);
-      if (req.query.cursor) {
-        if (!validId(req.query.cursor)) fail(400, "Invalid member page.");
-        query = query.startAfter(req.query.cursor);
-      }
-      const page = await query.get();
-      const docs = page.docs.slice(0, 50);
-      const members = await Promise.all(
-        docs.map(async (doc) => {
-          const m = doc.data(),
-            profile = await users.doc(m.uid).get();
-          const block = await blockRefs(db, req.account.uid, m.uid)[0].get();
-          return {
-            id: m.uid,
-            name: profile.data()?.fullName || "Member",
-            area: profile.data()?.area || "",
-            hidden: v.member.hiddenMembers?.includes(m.uid) || false,
-            blocked: block.exists,
-          };
-        }),
+      const user = await identity(db, req);
+      const value = await access(db, req.params.id, user?.id);
+      if (!value.member) fail(403, "Join this group first.");
+      const cursor = req.query.cursor;
+      if (cursor && !validId(cursor)) fail(400, "Invalid member page.");
+      const { rows } = await db.query(
+        `SELECT u.firebase_uid, u.full_name, u.area
+           FROM group_memberships m
+           JOIN users u ON u.id = m.user_id
+          WHERE m.group_id = $1 AND m.status = 'active'
+            AND ($2::text IS NULL OR u.firebase_uid > $2)
+          ORDER BY u.firebase_uid
+          LIMIT 51`,
+        [value.id, cursor || null],
       );
+      const members = rows.slice(0, 50).map((row) => ({
+        id: row.firebase_uid,
+        name: row.full_name || "Member",
+        area: row.area || "",
+        hidden: value.member.hiddenMembers?.includes(row.firebase_uid) || false,
+        blocked: false,
+      }));
+      if (members.length) {
+        const ids = members.map((member) => member.id);
+        const { rows: blocked } = await db.query(
+          `SELECT u.firebase_uid
+             FROM contact_blocks b
+             JOIN users u ON u.id = b.target_id
+            WHERE b.owner_id = $1 AND u.firebase_uid = ANY($2::text[])`,
+          [user.id, ids],
+        );
+        const blockedIds = new Set(blocked.map((row) => row.firebase_uid));
+        members.forEach((member) => {
+          member.blocked = blockedIds.has(member.id);
+        });
+      }
       res.json({
         members,
-        nextCursor: page.size > 50 ? docs[docs.length - 1].id : null,
+        nextCursor: rows.length > 50 ? rows[49].firebase_uid : null,
       });
     }),
   );
@@ -677,18 +868,17 @@ function installGroupRoutes(app, db, { clock = Date.now } = {}) {
   app.get(
     "/api/contact-blocks",
     route(async (req, res) => {
-      const blocked = await db
-        .collection("contactBlocks")
-        .where("ownerId", "==", req.account.uid)
-        .get();
-      const people = await Promise.all(
-        blocked.docs.map(async (doc) => {
-          const id = doc.data().targetId,
-            profile = await users.doc(id).get();
-          return { id, name: profile.data()?.fullName || "Member" };
-        }),
+      const user = await identity(db, req);
+      const { rows } = await db.query(
+        `SELECT target.firebase_uid AS id,
+                COALESCE(target.full_name, 'Member') AS name
+           FROM contact_blocks b
+           JOIN users target ON target.id = b.target_id
+          WHERE b.owner_id = $1
+          ORDER BY target.firebase_uid`,
+        [user?.id],
       );
-      res.json({ people });
+      res.json({ people: rows });
     }),
   );
 
@@ -702,16 +892,25 @@ function installGroupRoutes(app, db, { clock = Date.now } = {}) {
         typeof blocked !== "boolean"
       )
         fail(400, "Choose another member.");
-      const reference = blockRefs(db, req.account.uid, targetId)[0];
-      if (blocked) {
-        if (!(await users.doc(targetId).get()).exists)
-          fail(404, "Member not found.");
-        await reference.set({
-          ownerId: req.account.uid,
-          targetId,
-          createdAt: new Date(clock()).toISOString(),
-        });
-      } else await reference.delete();
+      await transaction(db, async (client) => {
+        const user = await identity(client, req);
+        const target = await currentIdentity(client, targetId);
+        if (blocked && !target) fail(404, "Member not found.");
+        if (!target) return;
+        if (blocked) {
+          await client.query(
+            `INSERT INTO contact_blocks (owner_id, target_id, created_at)
+             VALUES ($1, $2, $3)
+             ON CONFLICT (owner_id, target_id) DO NOTHING`,
+            [user.id, target.id, new Date(clock())],
+          );
+        } else {
+          await client.query(
+            "DELETE FROM contact_blocks WHERE owner_id = $1 AND target_id = $2",
+            [user.id, target.id],
+          );
+        }
+      });
       res.json({ blocked });
     }),
   );
@@ -719,45 +918,70 @@ function installGroupRoutes(app, db, { clock = Date.now } = {}) {
   app.get(
     "/api/groups/:id/messages",
     route(async (req, res) => {
-      const v = await access(req.params.id, req.account.uid);
-      if (!v.member) fail(403, "Join this group to read its messages.");
+      const user = await identity(db, req);
+      const value = await access(db, req.params.id, user?.id);
+      if (!value.member) fail(403, "Join this group to read its messages.");
       const { before, revision } = req.query;
       if (before !== undefined && revision !== undefined)
         fail(400, "Choose one message page.");
-      for (const value of [before, revision])
+      for (const page of [before, revision])
         if (
-          value !== undefined &&
-          (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)))
+          page !== undefined &&
+          (!/^\d+$/.test(page) || !Number.isSafeInteger(Number(page)))
         )
           fail(400, "Invalid message page.");
-      let query = v.ref.collection("messages");
-      if (revision !== undefined)
-        query = query
-          .where("revision", ">", Number(revision))
-          .orderBy("revision");
-      else {
-        query = query.orderBy("sequence", "desc");
-        if (before !== undefined) query = query.startAfter(Number(before));
+      let rows;
+      if (revision !== undefined) {
+        ({ rows } = await db.query(
+          `SELECT m.id, m.sender_id, u.firebase_uid AS sender_uid,
+                  m.sender_name, m.text, m.created_at, m.edited_at,
+                  m.deleted, m.sequence, m.revision
+             FROM group_messages m
+             JOIN users u ON u.id = m.sender_id
+            WHERE m.group_id = $1 AND m.revision > $2
+            ORDER BY m.revision
+            LIMIT 51`,
+          [value.id, Number(revision)],
+        ));
+      } else {
+        ({ rows } = await db.query(
+          `SELECT m.id, m.sender_id, u.firebase_uid AS sender_uid,
+                  m.sender_name, m.text, m.created_at, m.edited_at,
+                  m.deleted, m.sequence, m.revision
+             FROM group_messages m
+             JOIN users u ON u.id = m.sender_id
+            WHERE m.group_id = $1 AND ($2::bigint IS NULL OR m.sequence < $2)
+            ORDER BY m.sequence DESC
+            LIMIT 51`,
+          [value.id, before === undefined ? null : Number(before)],
+        ));
       }
-      const page = await query.limit(51).get();
-      const docs = page.docs.slice(0, 50);
-      const messages = docs.map((doc) => {
-        const { originalText, ...message } = doc.data();
-        return { ...message, id: doc.id };
-      });
+      const hasMore = rows.length > 50;
+      const page = rows.slice(0, 50);
+      const messages = page.map((row) => ({
+        id: row.id,
+        senderId: row.sender_uid,
+        senderName: row.sender_name,
+        text: row.text,
+        createdAt: iso(row.created_at),
+        editedAt: iso(row.edited_at),
+        deleted: row.deleted,
+        sequence: Number(row.sequence),
+        revision: Number(row.revision),
+      }));
       if (revision === undefined) messages.reverse();
       const syncedRevision =
         revision === undefined
-          ? v.group.revision
-          : Math.max(Number(revision), ...messages.map((m) => m.revision));
+          ? value.group.revision
+          : Math.max(Number(revision), ...messages.map((message) => message.revision));
       res.json({
-        group: summary(v.ref.id, v.group, v.member, clock()),
+        group: summary(value.id, value.group, value.member, clock()),
         messages,
         revision: syncedRevision,
-        moreChanges: revision !== undefined && page.size > 50,
+        moreChanges: revision !== undefined && hasMore,
         nextBefore:
-          revision === undefined && page.size > 50
-            ? docs[docs.length - 1].data().sequence
+          revision === undefined && hasMore
+            ? Number(page[page.length - 1].sequence)
             : null,
       });
     }),
@@ -774,63 +998,109 @@ function installGroupRoutes(app, db, { clock = Date.now } = {}) {
         2000,
         "Enter a message of up to 2,000 characters.",
       );
-      const message = await db.runTransaction(async (tx) => {
-        const v = await access(req.params.id, req.account.uid, tx);
-        if (!v.member) fail(403, "Join this group to send messages.");
-        const messageRef = v.ref.collection("messages").doc(body.id);
-        const [existing, profile] = await Promise.all([
-          tx.get(messageRef),
-          tx.get(users.doc(req.account.uid)),
-        ]);
-        if (existing.exists) {
-          const m = existing.data();
-          if (m.senderId !== req.account.uid || m.originalText !== content)
+      const message = await transaction(db, async (client) => {
+        const user = await identity(client, req);
+        const value = await access(client, req.params.id, user.id, true);
+        if (!value.member) fail(403, "Join this group to send messages.");
+        const { rows: existing } = await client.query(
+          `SELECT id, sender_id, sender_name, text, original_text, created_at,
+                  edited_at, deleted, sequence, revision
+             FROM group_messages WHERE group_id = $1 AND id = $2`,
+          [value.id, body.id],
+        );
+        if (existing[0]) {
+          if (
+            existing[0].sender_id !== user.id ||
+            existing[0].original_text !== content
+          )
             fail(409, "Message ID already used.");
-          return { ...m, id: body.id, originalText: undefined };
+          return {
+            id: body.id,
+            senderId: req.account.uid,
+            senderName: existing[0].sender_name,
+            text: existing[0].text,
+            createdAt: iso(existing[0].created_at),
+            editedAt: iso(existing[0].edited_at),
+            deleted: existing[0].deleted,
+            sequence: Number(existing[0].sequence),
+            revision: Number(existing[0].revision),
+          };
         }
-        const now = new Date(clock()).toISOString();
-        const m = {
+        const now = clock();
+        const sequence = value.group.sequence + 1;
+        const revision = value.group.revision + 1;
+        const preview = content;
+        await client.query(
+          `INSERT INTO group_messages
+             (group_id, id, sender_id, sender_name, text, original_text,
+              created_at, edited_at, deleted, sequence, revision)
+           VALUES ($1, $2, $3, $4, $5, $5, $6, NULL, false, $7, $8)`,
+          [
+            value.id,
+            body.id,
+            user.id,
+            user.full_name || "Member",
+            content,
+            new Date(now),
+            sequence,
+            revision,
+          ],
+        );
+        const activity = activityValues(value.group, now);
+        await client.query(
+          `UPDATE community_groups
+              SET last_activity_at = $2, last_event_end = $3, delete_after = $4,
+                  sequence = $5, revision = $6, preview = $7, updated_at = $2
+            WHERE id = $1`,
+          [
+            value.id,
+            activity.lastActivityAt,
+            activity.lastEventEnd,
+            activity.deleteAfter,
+            sequence,
+            revision,
+            preview,
+          ],
+        );
+        await client.query(
+          `UPDATE group_memberships SET last_read_sequence = $3
+            WHERE group_id = $1 AND user_id = $2`,
+          [value.id, user.id, sequence],
+        );
+        return {
+          id: body.id,
           senderId: req.account.uid,
-          senderName: profile.data()?.fullName || "Member",
+          senderName: user.full_name || "Member",
           text: content,
-          originalText: content,
-          createdAt: now,
+          createdAt: new Date(now).toISOString(),
           editedAt: null,
           deleted: false,
-          sequence: v.group.sequence + 1,
-          revision: v.group.revision + 1,
+          sequence,
+          revision,
         };
-        tx.create(messageRef, m);
-        tx.update(v.ref, {
-          ...activityPatch(v.group, clock()),
-          sequence: m.sequence,
-          revision: m.revision,
-          preview: content,
-        });
-        tx.update(v.memberRef, { lastReadSequence: m.sequence });
-        const { originalText, ...publicMessage } = m;
-        return { ...publicMessage, id: body.id };
       });
       res.json({ message });
     }),
   );
 
-  // Sent group messages cannot be edited or individually removed.
   app.post(
     "/api/groups/:id/read",
     route(async (req, res) => {
       const sequence = req.body?.sequence;
       if (!Number.isSafeInteger(sequence) || sequence < 0)
         fail(400, "Invalid read marker.");
-      await db.runTransaction(async (tx) => {
-        const v = await access(req.params.id, req.account.uid, tx);
-        if (!v.member) fail(403, "Join this group first.");
-        tx.update(v.memberRef, {
-          lastReadSequence: Math.max(
-            v.member.lastReadSequence || 0,
-            Math.min(sequence, v.group.sequence),
-          ),
-        });
+      await transaction(db, async (client) => {
+        const user = await identity(client, req);
+        const value = await access(client, req.params.id, user.id, true);
+        if (!value.member) fail(403, "Join this group first.");
+        await client.query(
+          `UPDATE group_memberships
+              SET last_read_sequence = GREATEST(
+                last_read_sequence, LEAST($3::bigint, $4::bigint)
+              )
+            WHERE group_id = $1 AND user_id = $2`,
+          [value.id, user.id, sequence, value.group.sequence],
+        );
       });
       res.json({ read: true });
     }),
@@ -853,39 +1123,62 @@ function installGroupRoutes(app, db, { clock = Date.now } = {}) {
       )
         fail(400, "Choose a message or member and a reason.");
       text(details, 0, 1000, "Keep the report within 1,000 characters.");
-      await db.runTransaction(async (tx) => {
-        const v = await access(req.params.id, req.account.uid, tx);
-        if (!v.member) fail(403, "Join this group first.");
-        const target = messageId
-          ? await tx.get(v.ref.collection("messages").doc(messageId))
-          : await tx.get(membershipRef(db, v.ref.id, memberId));
-        if (!target.exists) fail(404, "The reported item was not found.");
-        const targetId = messageId ? target.data().senderId : memberId;
-        if (targetId === req.account.uid)
+      await transaction(db, async (client) => {
+        const user = await identity(client, req);
+        const value = await access(client, req.params.id, user.id, true);
+        if (!value.member) fail(403, "Join this group first.");
+        let targetUserId;
+        let messageText = null;
+        if (messageId) {
+          const { rows } = await client.query(
+            `SELECT sender_id, text FROM group_messages
+              WHERE group_id = $1 AND id = $2`,
+            [value.id, messageId],
+          );
+          if (!rows[0]) fail(404, "The reported item was not found.");
+          targetUserId = rows[0].sender_id;
+          messageText = rows[0].text;
+        } else {
+          const { rows } = await client.query(
+            `SELECT m.user_id FROM group_memberships m
+              JOIN users u ON u.id = m.user_id
+             WHERE m.group_id = $1 AND m.status = 'active'
+               AND u.firebase_uid = $2`,
+            [value.id, memberId],
+          );
+          if (!rows[0]) fail(404, "The reported item was not found.");
+          targetUserId = rows[0].user_id;
+        }
+        if (targetUserId === user.id)
           fail(400, "Choose another member's content.");
-        const reference = db
-          .collection("groupReports")
-          .doc(hash(v.ref.id, req.account.uid, messageId || memberId, reason));
-        const existing = await tx.get(reference);
-        if (!existing.exists)
-          tx.create(reference, {
-            groupId: v.ref.id,
-            groupName: v.group.name,
-            reporterId: req.account.uid,
-            memberId: targetId,
-            messageId: messageId || null,
-            messageText: messageId ? target.data().text : null,
+        const reportId = hash(
+          value.id,
+          req.account.uid,
+          messageId || memberId,
+          reason,
+        );
+        const now = new Date(clock());
+        await client.query(
+          `INSERT INTO group_reports
+             (id, group_id, reporter_id, member_id, message_id, message_text,
+              reason, details, latest_details, status, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, '', 'open', $9)
+           ON CONFLICT (id) DO UPDATE
+             SET latest_details = EXCLUDED.details,
+                 last_reported_at = EXCLUDED.created_at,
+                 status = 'open'`,
+          [
+            reportId,
+            value.id,
+            user.id,
+            targetUserId,
+            messageId || null,
+            messageText,
             reason,
-            details: details.trim(),
-            createdAt: new Date(clock()).toISOString(),
-            status: "open",
-          });
-        else
-          tx.update(reference, {
-            latestDetails: details.trim(),
-            lastReportedAt: new Date(clock()).toISOString(),
-            status: "open",
-          });
+            details.trim(),
+            now,
+          ],
+        );
       });
       res.json({ reported: true });
     }),
@@ -894,21 +1187,36 @@ function installGroupRoutes(app, db, { clock = Date.now } = {}) {
   app.get(
     "/api/groups/:id/events",
     route(async (req, res) => {
-      const v = await access(req.params.id, req.account.uid);
-      if (!v.member) fail(403, "Join this group first.");
-      const snapshot = await events.where("groupId", "==", v.ref.id).get();
+      const user = await identity(db, req);
+      const value = await access(db, req.params.id, user?.id);
+      if (!value.member) fail(403, "Join this group first.");
+      const { rows } = await db.query(
+        `SELECT e.*, creator.firebase_uid AS creator_uid
+           FROM group_events e
+           JOIN users creator ON creator.id = e.creator_id
+          WHERE e.group_id = $1 AND e.status = 'published' AND e.ends_at > $2
+          ORDER BY e.starts_at`,
+        [value.id, new Date(clock())],
+      );
       res.json({
-        events: snapshot.docs
-          .map((doc) => ({
-            ...doc.data(),
-            id: doc.id,
-            startsAt: new Date(milliseconds(doc.data().startsAt)).toISOString(),
-            endsAt: new Date(milliseconds(doc.data().endsAt)).toISOString(),
-          }))
-          .filter(
-            (e) => e.status === "published" && Date.parse(e.endsAt) > clock(),
-          )
-          .sort((a, b) => a.startsAt.localeCompare(b.startsAt)),
+        events: rows.map((row) => ({
+          id: row.id,
+          groupId: row.group_id,
+          creatorId: row.creator_uid,
+          requestId: row.request_id,
+          title: row.title,
+          location: row.location,
+          description: row.description,
+          latitude: row.latitude,
+          longitude: row.longitude,
+          mapCell: row.map_cell,
+          startsAt: iso(row.starts_at),
+          endsAt: iso(row.ends_at),
+          status: row.status,
+          interests: row.interests,
+          timeZone: row.time_zone,
+          updatedAt: iso(row.updated_at),
+        })),
       });
     }),
   );
@@ -916,23 +1224,23 @@ function installGroupRoutes(app, db, { clock = Date.now } = {}) {
   app.post(
     "/api/groups/:id/events",
     route(async (req, res) => {
-      const b = req.body || {};
-      if (!validId(b.id)) fail(400, "Invalid event.");
-      const title = text(b.title, 3, 120, "Enter an event title.");
+      const body = req.body || {};
+      if (!validId(body.id)) fail(400, "Invalid event.");
+      const title = text(body.title, 3, 120, "Enter an event title.");
       const location = text(
-        b.location,
+        body.location,
         3,
         200,
         "Enter a public venue and address.",
       );
       const description = text(
-        b.description || "",
+        body.description || "",
         0,
         2000,
         "Keep the description within 2,000 characters.",
       );
-      const start = Date.parse(b.startsAt),
-        end = Date.parse(b.endsAt);
+      const start = Date.parse(body.startsAt);
+      const end = Date.parse(body.endsAt);
       if (
         !Number.isFinite(start) ||
         !Number.isFinite(end) ||
@@ -940,56 +1248,84 @@ function installGroupRoutes(app, db, { clock = Date.now } = {}) {
         start > clock() + 366 * DAY ||
         end <= start ||
         end - start > 7 * DAY ||
-        !Number.isFinite(b.latitude) ||
-        !Number.isFinite(b.longitude) ||
-        Math.abs(b.latitude) > 90 ||
-        Math.abs(b.longitude) > 180 ||
-        b.publicVenueConfirmed !== true
+        !Number.isFinite(body.latitude) ||
+        !Number.isFinite(body.longitude) ||
+        Math.abs(body.latitude) > 90 ||
+        Math.abs(body.longitude) > 180 ||
+        body.publicVenueConfirmed !== true
       )
         fail(
           400,
           "Check the event time and confirm its public meeting location.",
         );
-      await db.runTransaction(async (tx) => {
-        const v = await access(req.params.id, req.account.uid, tx);
-        if (!v.member) fail(403, "Join this group to organize an event.");
-        const reference = events.doc(hash(v.ref.id, b.id));
-        const [old, all] = await Promise.all([
-          tx.get(reference),
-          tx.get(events.where("groupId", "==", v.ref.id)),
-        ]);
+      await transaction(db, async (client) => {
+        const user = await identity(client, req);
+        const value = await access(client, req.params.id, user.id, true);
+        if (!value.member) fail(403, "Join this group to organize an event.");
+        const id = hash(value.id, body.id);
+        const { rows: existingRows } = await client.query(
+          `SELECT * FROM group_events
+            WHERE group_id = $1 AND request_id = $2
+            FOR UPDATE`,
+          [value.id, body.id],
+        );
+        const old = existingRows[0];
         if (
           start <= clock() &&
-          (!old.exists || start !== milliseconds(old.data().startsAt))
+          (!old || start !== milliseconds(old.starts_at))
         )
           fail(400, "Choose a future start time for a new event.");
-        if (old.exists && old.data().creatorId !== req.account.uid)
+        if (old && old.creator_id !== user.id)
           fail(403, "You can change only your own events.");
-        const data = {
-          title,
-          location,
-          description,
-          latitude: b.latitude,
-          longitude: b.longitude,
-          mapCell: mapCellFor(b.latitude, b.longitude),
-          startsAt: Timestamp.fromMillis(start),
-          endsAt: Timestamp.fromMillis(end),
-          status: "published",
-          groupId: v.ref.id,
-          creatorId: req.account.uid,
-          interests: v.group.interests,
-          requestId: b.id,
-          updatedAt: new Date(clock()).toISOString(),
-        };
         const latestEnd = Math.max(
           end,
-          futureEnd(
-            all.docs.filter((d) => d.id !== reference.id),
-            clock(),
-          ),
+          await futureEnd(client, value.id, clock(), old?.id || id),
         );
-        tx.set(reference, data);
-        tx.update(v.ref, activityPatch(v.group, clock(), latestEnd));
+        const now = new Date(clock());
+        await client.query(
+          `INSERT INTO group_events
+             (id, group_id, creator_id, request_id, title, location, description,
+              latitude, longitude, map_cell, starts_at, ends_at, status,
+              interests, time_zone, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                   'published', $13, 'America/Toronto', $14)
+           ON CONFLICT (group_id, request_id) DO UPDATE
+             SET title = EXCLUDED.title, location = EXCLUDED.location,
+                 description = EXCLUDED.description, latitude = EXCLUDED.latitude,
+                 longitude = EXCLUDED.longitude, map_cell = EXCLUDED.map_cell,
+                 starts_at = EXCLUDED.starts_at, ends_at = EXCLUDED.ends_at,
+                 status = 'published', interests = EXCLUDED.interests,
+                 updated_at = EXCLUDED.updated_at`,
+          [
+            id,
+            value.id,
+            user.id,
+            body.id,
+            title,
+            location,
+            description,
+            body.latitude,
+            body.longitude,
+            mapCellFor(body.latitude, body.longitude),
+            new Date(start),
+            new Date(end),
+            value.group.interests,
+            now,
+          ],
+        );
+        const activity = activityValues(value.group, clock(), latestEnd);
+        await client.query(
+          `UPDATE community_groups
+              SET last_activity_at = $2, last_event_end = $3, delete_after = $4,
+                  updated_at = $2
+            WHERE id = $1`,
+          [
+            value.id,
+            activity.lastActivityAt,
+            activity.lastEventEnd,
+            activity.deleteAfter,
+          ],
+        );
       });
       res.json({ saved: true });
     }),
@@ -999,34 +1335,66 @@ function installGroupRoutes(app, db, { clock = Date.now } = {}) {
     "/api/groups/:id/events/:eventId/cancel",
     route(async (req, res) => {
       if (!validId(req.params.eventId)) fail(400, "Invalid event.");
-      await db.runTransaction(async (tx) => {
-        const v = await access(req.params.id, req.account.uid, tx);
-        if (!v.member) fail(403, "Join this group first.");
-        const reference = events.doc(req.params.eventId);
-        const [old, all] = await Promise.all([
-          tx.get(reference),
-          tx.get(events.where("groupId", "==", v.ref.id)),
-        ]);
-        if (!old.exists || old.data().groupId !== v.ref.id)
-          fail(404, "Event not found.");
-        if (old.data().creatorId !== req.account.uid)
+      await transaction(db, async (client) => {
+        const user = await identity(client, req);
+        const value = await access(client, req.params.id, user.id, true);
+        if (!value.member) fail(403, "Join this group first.");
+        const { rows } = await client.query(
+          "SELECT * FROM group_events WHERE id = $1 AND group_id = $2 FOR UPDATE",
+          [req.params.eventId, value.id],
+        );
+        const old = rows[0];
+        if (!old) fail(404, "Event not found.");
+        if (old.creator_id !== user.id)
           fail(403, "You can cancel only your own events.");
-        tx.update(reference, { status: "cancelled" });
-        tx.update(
-          v.ref,
-          activityPatch(
-            v.group,
-            clock(),
-            futureEnd(
-              all.docs.filter((d) => d.id !== reference.id),
-              clock(),
-            ),
-          ),
+        await client.query(
+          `UPDATE group_events SET status = 'cancelled', updated_at = $2
+            WHERE id = $1`,
+          [old.id, new Date(clock())],
+        );
+        const latestEnd = await futureEnd(client, value.id, clock(), old.id);
+        const activity = activityValues(value.group, clock(), latestEnd);
+        await client.query(
+          `UPDATE community_groups
+              SET last_activity_at = $2, last_event_end = $3, delete_after = $4,
+                  updated_at = $2
+            WHERE id = $1`,
+          [
+            value.id,
+            activity.lastActivityAt,
+            activity.lastEventEnd,
+            activity.deleteAfter,
+          ],
         );
       });
       res.json({ cancelled: true });
     }),
   );
+}
+
+async function assertCanContact(db, uid, peer, transactionClient) {
+  if (
+    typeof uid !== "string" ||
+    !uid ||
+    uid.length > 128 ||
+    typeof peer !== "string" ||
+    !peer ||
+    peer.length > 128
+  )
+    fail(401, "Please sign in.");
+  const queryable = transactionClient || db;
+  const { rows } = await queryable.query(
+    `SELECT 1
+       FROM contact_blocks b
+       JOIN users owner ON owner.id = b.owner_id
+       JOIN users target ON target.id = b.target_id
+      WHERE (owner.firebase_uid = $1 AND target.firebase_uid = $2)
+         OR (owner.firebase_uid = $2 AND target.firebase_uid = $1)
+      LIMIT 1`,
+    [uid, peer],
+  );
+  if (rows.length)
+    fail(403, "Direct contact between these members is blocked.");
 }
 
 module.exports = {

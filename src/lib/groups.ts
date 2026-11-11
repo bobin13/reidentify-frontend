@@ -89,7 +89,10 @@ if (
 export const groupPath = (id: string) =>
   `/api/groups/${encodeURIComponent(id)}`;
 export const requestId = () =>
-  `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}-${Math.random().toString(36).slice(2, 10)}`;
+  "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (character) => {
+    const random = Math.floor(Math.random() * 16);
+    return (character === "x" ? random : (random & 0x3) | 0x8).toString(16);
+  });
 export const groupError = (error: unknown) =>
   error instanceof Error ? error.message : "Please try again.";
 export const dateLabel = (value: string) =>

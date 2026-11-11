@@ -1,6 +1,6 @@
 const { externalEventService } = require("./external-events");
 const { installMapRoutes } = require("./map-routes");
-const { groupEventScope, readMemberEvents } = require("./group-event-access");
+const { groupEventScope, readMemberEvents } = require("./map-geography");
 
 function distanceKm(a, b) {
   const rad = (n) => (n * Math.PI) / 180;
@@ -39,20 +39,14 @@ function optionsFor(query, now) {
   };
 }
 
-function serializeGroupEvent(doc) {
-  const d = doc.data();
+function serializeGroupEvent(d) {
   function time(v) {
-    const ms =
-      typeof v?.toMillis === "function"
-        ? v.toMillis()
-        : typeof v?.toDate === "function"
-          ? v.toDate().getTime()
-          : NaN;
+    const ms = v instanceof Date ? v.getTime() : Date.parse(v);
     return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
   }
   if (d.status !== "published") return null;
   return {
-    id: doc.id,
+    id: d.id,
     title: typeof d.title === "string" ? d.title.trim() : "",
     venueName: typeof d.venueName === "string" ? d.venueName : d.location,
     location: typeof d.location === "string" ? d.location.trim() : "",
@@ -67,7 +61,7 @@ function serializeGroupEvent(doc) {
     sourceName: "ReIdentify group",
     groupId: d.groupId || null,
     timeZone: typeof d.timeZone === "string" ? d.timeZone : "America/Toronto",
-    seriesId: doc.id,
+    seriesId: d.id,
     sourceUrl: "",
     availability: "",
     cost: "",
@@ -136,15 +130,15 @@ function installEventRoutes(
       return res.status(400).json({ message: error.message });
     }
     try {
-      const scope = await groupEventScope(db, req.account?.uid);
-      const [result, groupDocs] = await Promise.all([
+      const scope = await groupEventScope(db, req.userId);
+      const [result, groupEvents] = await Promise.all([
         load(options),
         readMemberEvents(db, scope),
       ]);
       const seen = new Set();
       const events = [
         ...result.events,
-        ...groupDocs.map(serializeGroupEvent).filter(Boolean),
+        ...groupEvents.map(serializeGroupEvent).filter(Boolean),
       ]
         .filter((event) => {
           if (event.origin === "group" && !scope.allows(event)) return false;
