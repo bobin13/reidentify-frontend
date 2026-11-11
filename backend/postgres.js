@@ -81,16 +81,58 @@ async function ensureUser(client, account) {
       ? account.name.trim().slice(0, 120)
       : email.split("@")[0].slice(0, 120) || "Member";
 
-  const result = await client.query(
-    `INSERT INTO users (firebase_uid, full_name, email)
-     VALUES ($1, $2, $3)
-     ON CONFLICT (firebase_uid) DO UPDATE
-       SET email = EXCLUDED.email,
-           updated_at = now()
-     RETURNING id`,
-    [firebaseUid, fullName, email],
+  const placeholder = `${firebaseUid}@firebase-user.invalid`;
+
+  // Most requests only need the existing row; avoid a write per request.
+  const existing = await client.query(
+    "SELECT id, email FROM users WHERE firebase_uid = $1",
+    [firebaseUid],
   );
-  return result.rows[0].id;
+  if (existing.rowCount) {
+    const row = existing.rows[0];
+    if (row.email !== email) {
+      // Follow the Firebase email unless another account already holds it.
+      await client.query(
+        `UPDATE users SET email = $2, updated_at = now()
+          WHERE firebase_uid = $1
+            AND NOT EXISTS (
+              SELECT 1 FROM users WHERE email = $2 AND firebase_uid <> $1
+            )`,
+        [firebaseUid, email],
+      );
+    }
+    return row.id;
+  }
+
+  // users.email is unique. A re-registered Firebase account with the same
+  // email gets a fresh profile with a placeholder email instead of a 503.
+  try {
+    const result = await client.query(
+      `INSERT INTO users (firebase_uid, full_name, email)
+       VALUES (
+         $1, $2,
+         CASE
+           WHEN EXISTS (SELECT 1 FROM users WHERE email = $3 AND firebase_uid <> $1)
+           THEN $4 ELSE $3
+         END
+       )
+       ON CONFLICT (firebase_uid) DO UPDATE SET updated_at = now()
+       RETURNING id`,
+      [firebaseUid, fullName, email, placeholder],
+    );
+    return result.rows[0].id;
+  } catch (error) {
+    if (error.code !== "23505") throw error;
+    // Lost a race with a concurrent insert for the same email or uid.
+    const retry = await client.query(
+      `INSERT INTO users (firebase_uid, full_name, email)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (firebase_uid) DO UPDATE SET updated_at = now()
+       RETURNING id`,
+      [firebaseUid, fullName, placeholder],
+    );
+    return retry.rows[0].id;
+  }
 }
 
 async function closePool() {

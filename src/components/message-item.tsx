@@ -9,7 +9,7 @@ import {
 
 import type { AppColors } from "../constants/app-colors";
 import { useAppTheme } from "../context/theme-context";
-import type { Conversation } from "../data/sample-conversations";
+import type { Chat } from "../lib/messaging";
 import {
   ChatText,
   hideSwearWords,
@@ -17,7 +17,7 @@ import {
 } from "./chat-display";
 
 type MessageItemProps = {
-  conversation: Conversation;
+  conversation: Chat;
 };
 
 export function MessageItem({ conversation }: MessageItemProps) {

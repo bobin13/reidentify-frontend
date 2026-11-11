@@ -17,7 +17,6 @@ function createFreeNewsRouter({
 
   async function requestFreeNewsApi(endpoint, params) {
     const apiKey = getApiKey();
-    console.println("API Key:", apiKey); // Debugging line to check the API key
     if (!apiKey) {
       throw new ApiError(503, "News API is not configured");
     }

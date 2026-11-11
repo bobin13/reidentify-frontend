@@ -9,6 +9,7 @@ const { installMessagingRoutes } = require("../messages-routes");
 
 const viewerId = "00000000-0000-4000-8000-000000000001";
 const peerId = "00000000-0000-4000-8000-000000000002";
+const peerUid = "firebase-peer";
 const conversationId = "a".repeat(64);
 
 function routeApp() {
@@ -55,7 +56,7 @@ async function invoke(handler, { params = {}, query = {}, body } = {}) {
   return response;
 }
 
-test("profile routes query public profile data with UUID parameters", async () => {
+test("profile routes look up public profiles by Firebase UID and return it as the id", async () => {
   const app = routeApp();
   const calls = [];
   const db = {
@@ -65,6 +66,7 @@ test("profile routes query public profile data with UUID parameters", async () =
         rows: [
           {
             id: peerId,
+            firebase_uid: peerUid,
             full_name: "Public Member",
             email: "member@example.com",
             area: "Toronto",
@@ -90,16 +92,60 @@ test("profile routes query public profile data with UUID parameters", async () =
   });
 
   const response = await invoke(app.routes.get("GET /api/profiles/:uid"), {
-    params: { uid: peerId },
+    params: { uid: peerUid },
   });
 
   assert.equal(response.code, 200);
-  assert.equal(response.value.profile.id, peerId);
+  assert.equal(response.value.profile.id, peerUid);
   assert.equal(response.value.profile.fullName, "Public Member");
   assert.equal(response.value.profile.age, 34);
   assert.deepEqual(response.value.profile.interests, ["Walking & outdoors"]);
-  assert.equal(calls[0].values[0], peerId);
-  assert.match(calls[0].sql, /\$1::uuid/);
+  assert.equal(calls[0].values[0], peerUid);
+  assert.match(calls[0].sql, /u\.firebase_uid = \$1/);
+});
+
+test("the signed-in user can read their own private profile and photo by Firebase UID", async () => {
+  const app = routeApp();
+  const calls = [];
+  const db = {
+    async query(sql, values) {
+      calls.push({ sql, values });
+      if (sql.includes("FROM profile_photos")) {
+        return {
+          rows: [
+            {
+              version: "photo-1",
+              mime_type: "image/jpeg",
+              content: Buffer.from([0xff, 0xd8, 0xff, 0xd9]),
+            },
+          ],
+        };
+      }
+      return {
+        rows: [
+          {
+            id: viewerId,
+            firebase_uid: "firebase-viewer",
+            full_name: "Me",
+            profile_visibility: "private",
+            photo_version: "photo-1",
+            interests: [],
+          },
+        ],
+      };
+    },
+  };
+  installProfileRoutes(app, db);
+
+  const response = await invoke(app.routes.get("GET /api/profiles/:uid/photo"), {
+    params: { uid: "firebase-viewer" },
+    query: { version: "photo-1" },
+  });
+
+  assert.equal(response.code, 200);
+  assert.equal(response.value.jpeg, Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString("base64"));
+  const photoCall = calls.find((call) => call.sql.includes("FROM profile_photos"));
+  assert.deepEqual(photoCall.values, [viewerId]);
 });
 
 test("profile helpers preserve age and accept PostgreSQL profile columns", () => {
@@ -133,6 +179,7 @@ test("private profiles are hidden from other authenticated users", async () => {
         rows: [
           {
             id: peerId,
+            firebase_uid: peerUid,
             full_name: "Private Member",
             profile_visibility: "private",
             interests: [],
@@ -144,21 +191,23 @@ test("private profiles are hidden from other authenticated users", async () => {
   installProfileRoutes(app, db);
 
   const response = await invoke(app.routes.get("GET /api/profiles/:uid"), {
-    params: { uid: peerId },
+    params: { uid: peerUid },
   });
 
   assert.equal(response.code, 404);
   assert.deepEqual(response.value, { message: "Profile not found." });
 });
 
-test("people route exposes user UUIDs and parameterizes the current user", async () => {
+test("people route exposes Firebase UIDs and parameterizes the current user", async () => {
   const app = routeApp();
   let call;
   const db = {
     async query(sql, values) {
       call = { sql, values };
       return {
-        rows: [{ id: peerId, full_name: "Member", area: null }],
+        rows: [
+          { id: peerId, firebase_uid: peerUid, full_name: "Member", area: null },
+        ],
       };
     },
   };
@@ -167,7 +216,7 @@ test("people route exposes user UUIDs and parameterizes the current user", async
   const response = await invoke(app.routes.get("GET /api/people"));
 
   assert.deepEqual(response.value.people, [
-    { id: peerId, name: "Member", area: "" },
+    { id: peerUid, name: "Member", area: "" },
   ]);
   assert.deepEqual(call.values, [viewerId]);
   assert.match(call.sql, /\$1::uuid/);
@@ -199,6 +248,62 @@ test("conversation summaries include the peer Firebase UID for their avatar", as
   );
 
   assert.equal(response.value.conversations[0].peerId, "firebase-peer");
+});
+
+test("conversations start from a peer Firebase UID and resolve it to the UUID", async () => {
+  const app = routeApp();
+  const writes = [];
+  const db = {
+    async query(sql, values) {
+      assert.match(sql, /FROM direct_conversations c/);
+      assert.equal(values[0], viewerId);
+      return {
+        rows: [
+          {
+            id: values[1],
+            peer_uid: peerUid,
+            full_name: "Peer",
+            area: "",
+            last_message_text: null,
+            updated_at: new Date("2024-01-01T00:00:00Z"),
+            unread_count: 0,
+          },
+        ],
+      };
+    },
+    async connect() {
+      return {
+        async query(sql, values = []) {
+          if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) return { rows: [] };
+          if (sql.includes("WHERE firebase_uid = $1")) {
+            assert.deepEqual(values, [peerUid]);
+            return { rows: [{ id: peerId }], rowCount: 1 };
+          }
+          if (sql.includes("FROM contact_blocks")) return { rows: [], rowCount: 0 };
+          if (sql.includes("INSERT INTO direct_conversations")) {
+            writes.push(values);
+            return { rows: [], rowCount: 1 };
+          }
+          throw new Error(`Unexpected SQL in test: ${sql}`);
+        },
+        release() {},
+      };
+    },
+  };
+  installMessagingRoutes(app, db);
+
+  const response = await invoke(app.routes.get("POST /api/conversations"), {
+    body: { peerId: peerUid },
+  });
+
+  assert.equal(response.code, 200);
+  assert.equal(response.value.conversation.peerId, peerUid);
+  assert.deepEqual(writes[0].slice(1), [viewerId, peerId]);
+
+  const rejected = await invoke(app.routes.get("POST /api/conversations"), {
+    body: { peerId: "firebase-viewer" },
+  });
+  assert.equal(rejected.code, 400);
 });
 
 test("message retries are idempotent", async () => {
@@ -287,6 +392,8 @@ test("message retries are idempotent", async () => {
 
   assert.equal(first.code, 200);
   assert.deepEqual(retry.value, first.value);
+  assert.equal(first.value.message.senderId, "firebase-viewer");
   assert.equal(inserts.length, 1);
+  assert.equal(inserts[0].sender_id, viewerId);
   assert.equal(inserts[0].text, "Hello");
 });

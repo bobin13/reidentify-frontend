@@ -326,7 +326,6 @@ function DirectMessagesScreen() {
               conversation={{
                 ...chat,
                 timestamp: timeLabel(chat.timestamp),
-                messages: [],
               }}
             />
           ))}

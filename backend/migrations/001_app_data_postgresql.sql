@@ -138,12 +138,12 @@ BEGIN
     ALTER TABLE users ADD CONSTRAINT users_profile_visibility_check
       CHECK (profile_visibility IN ('public', 'private'));
   END IF;
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'community_groups_status_check'
-  ) THEN
-    ALTER TABLE community_groups ADD CONSTRAINT community_groups_status_check
-      CHECK (status IN ('active', 'closed', 'deleting'));
-  END IF;
+  -- Recreated on every run so databases migrated before 'deleted' was
+  -- allowed pick up the purge tombstone status.
+  ALTER TABLE community_groups
+    DROP CONSTRAINT IF EXISTS community_groups_status_check;
+  ALTER TABLE community_groups ADD CONSTRAINT community_groups_status_check
+    CHECK (status IN ('active', 'closed', 'deleting', 'deleted'));
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint WHERE conname = 'community_groups_member_count_check'
   ) THEN

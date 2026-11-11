@@ -34,7 +34,7 @@ export default function VenueMap({
     <View style={{ flex: 1 }}>
       <MapView
         ref={map}
-        style={StyleSheet.absoluteFillObject}
+        style={StyleSheet.absoluteFill}
         initialRegion={initial}
         userInterfaceStyle={theme}
         showsCompass

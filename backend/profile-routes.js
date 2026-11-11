@@ -206,9 +206,10 @@ function installProfileRoutes(app, db, { toOwner, now = Date.now } = {}) {
     ORDER BY a.groupid, a.activity
   )`;
 
+  // Clients identify people by Firebase UID; the UUID stays internal.
   function profileData(row) {
     return {
-      id: row.id,
+      id: row.firebase_uid,
       fullName: row.full_name,
       email: row.email || "",
       area: row.area || "",
@@ -233,11 +234,11 @@ function installProfileRoutes(app, db, { toOwner, now = Date.now } = {}) {
     const data = profileData(row);
     return toOwner
       ? toOwner(
-          { uid: row.id, email: row.email || "" },
+          { uid: row.firebase_uid, email: row.email || "" },
           { ...row, interests: data.interests },
         )
       : {
-          id: row.id,
+          id: row.firebase_uid,
           email: row.email || "",
           fullName: row.full_name,
           area: row.area || "",
@@ -247,23 +248,23 @@ function installProfileRoutes(app, db, { toOwner, now = Date.now } = {}) {
         };
   }
 
-  async function profileById(id) {
+  async function profileByUid(uid) {
     const result = await db.query(
       `SELECT u.*, COALESCE(${interestsSql}, ARRAY[]::text[]) AS interests
        FROM users u
-       WHERE u.id = $1::uuid`,
-      [id],
+       WHERE u.firebase_uid = $1`,
+      [uid],
     );
     return result.rows[0] || null;
   }
 
-  async function allowed(viewer, id) {
-    if (!validUuid(id)) throw fail("Profile not found.", 404);
-    id = id.toLowerCase();
-    const row = await profileById(id);
+  // `viewer` is the signed-in user's UUID; `uid` is the requested Firebase UID.
+  async function allowed(viewer, uid) {
+    if (!validId(uid)) throw fail("Profile not found.", 404);
+    const row = await profileByUid(uid);
     if (
       !row ||
-      (viewer !== id && row.profile_visibility !== "public")
+      (row.id !== viewer && row.profile_visibility !== "public")
     ) {
       throw fail("Profile not found.", 404);
     }
@@ -369,7 +370,7 @@ function installProfileRoutes(app, db, { toOwner, now = Date.now } = {}) {
       searches.set(req.account.uid, allowance);
 
       const found = await db.query(
-        `SELECT u.id, u.full_name, u.area,
+        `SELECT u.id, u.firebase_uid, u.full_name, u.area,
                 COALESCE(${interestsSql}, ARRAY[]::text[]) AS interests
          FROM users u
          WHERE u.profile_visibility = 'public'
@@ -402,7 +403,7 @@ function installProfileRoutes(app, db, { toOwner, now = Date.now } = {}) {
         if (!words.every((word) => text.includes(word))) continue;
 
         people.push({
-          id: row.id,
+          id: row.firebase_uid,
           fullName: row.full_name,
           area: typeof row.area === "string" ? row.area : "",
           interests,
@@ -456,7 +457,7 @@ function installProfileRoutes(app, db, { toOwner, now = Date.now } = {}) {
         throw fail("Photo not found.", 404);
       }
 
-      const key = `${req.params.uid}:${version}`;
+      const key = `${row.id}:${version}`;
       let bytes;
 
       const saved = cache.get(key);
@@ -468,7 +469,7 @@ function installProfileRoutes(app, db, { toOwner, now = Date.now } = {}) {
           `SELECT version, mime_type, content
            FROM profile_photos
            WHERE user_id = $1::uuid`,
-          [req.params.uid],
+          [row.id],
         );
         const photo = result.rows[0];
 

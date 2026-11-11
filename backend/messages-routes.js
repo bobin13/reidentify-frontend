@@ -128,16 +128,16 @@ function installMessagingRoutes(app, db) {
     "/api/people",
     route(async (req, res) => {
       const result = await db.query(
-        `SELECT id, full_name, area
+        `SELECT id, firebase_uid, full_name, area
          FROM users
          WHERE id <> $1::uuid
-         ORDER BY id
+         ORDER BY firebase_uid
          LIMIT 100`,
         [req.userId],
       );
       res.json({
         people: result.rows.map((row) => ({
-          id: row.id,
+          id: row.firebase_uid,
           name: row.full_name,
           area: row.area || "",
         })),
@@ -158,34 +158,36 @@ function installMessagingRoutes(app, db) {
     "/api/conversations",
     route(async (req, res) => {
       const uid = req.userId;
+      // Clients send the peer's public Firebase UID.
       const requestedPeerId = req.body?.peerId;
 
-      if (!validUuid(requestedPeerId) || requestedPeerId.toLowerCase() === uid) {
+      if (!validId(requestedPeerId) || requestedPeerId === req.account.uid) {
         fail(400, "Choose another member.");
       }
-      const peerId = requestedPeerId.toLowerCase();
 
-      const [low, high] = [uid, peerId].sort();
-      const id = createHash("sha256")
-        .update(JSON.stringify([low, high]))
-        .digest("hex");
-
-      await withTransaction(async (client) => {
-        const users = await client.query(
-          `SELECT id FROM users WHERE id IN ($1::uuid, $2::uuid)`,
-          [uid, peerId],
+      const id = await withTransaction(async (client) => {
+        const peer = await client.query(
+          "SELECT id FROM users WHERE firebase_uid = $1",
+          [requestedPeerId],
         );
-        if (users.rowCount !== 2) {
+        const peerId = peer.rows[0]?.id;
+        if (!peerId || peerId === uid) {
           fail(404, "Member profile not found.");
         }
+
+        const [low, high] = [uid, peerId].sort();
+        const conversation = createHash("sha256")
+          .update(JSON.stringify([low, high]))
+          .digest("hex");
 
         await assertCanContact(client, uid, peerId);
         await client.query(
           `INSERT INTO direct_conversations (id, user_low, user_high)
            VALUES ($1, $2::uuid, $3::uuid)
            ON CONFLICT (user_low, user_high) DO NOTHING`,
-          [id, low, high],
+          [conversation, low, high],
         );
+        return conversation;
       });
 
       const [conversation] = await summaries(uid, id);
@@ -240,24 +242,26 @@ function installMessagingRoutes(app, db) {
       if (cursor) {
         values.push(cursor.created_at, cursor.id);
         whereCursor = incremental
-          ? `AND (created_at > $2 OR (created_at = $2 AND id > $3))`
-          : `AND (created_at < $2 OR (created_at = $2 AND id < $3))`;
+          ? `AND (dm.created_at > $2 OR (dm.created_at = $2 AND dm.id > $3))`
+          : `AND (dm.created_at < $2 OR (dm.created_at = $2 AND dm.id < $3))`;
       }
 
+      // senderId is the sender's Firebase UID, matching the signed-in user's id.
       const order = incremental ? "ASC" : "DESC";
       const result = await db.query(
-        `SELECT id, sender_id, text, created_at
-         FROM direct_messages
-         WHERE conversation_id = $1
+        `SELECT dm.id, sender.firebase_uid AS sender_uid, dm.text, dm.created_at
+         FROM direct_messages dm
+         JOIN users sender ON sender.id = dm.sender_id
+         WHERE dm.conversation_id = $1
          ${whereCursor}
-         ORDER BY created_at ${order}, id ${order}
+         ORDER BY dm.created_at ${order}, dm.id ${order}
          LIMIT 51`,
         values,
       );
       const docs = result.rows.slice(0, 50);
       const messages = docs.map((row) => ({
         id: row.id,
-        senderId: row.sender_id,
+        senderId: row.sender_uid,
         text: row.text,
         createdAt: new Date(row.created_at).toISOString(),
       }));
@@ -315,7 +319,7 @@ function installMessagingRoutes(app, db) {
           }
           return {
             id: saved.id,
-            senderId: saved.sender_id,
+            senderId: req.account.uid,
             text: saved.text,
             createdAt: new Date(saved.created_at).toISOString(),
           };
@@ -345,7 +349,7 @@ function installMessagingRoutes(app, db) {
         );
         return {
           id: messageId,
-          senderId: uid,
+          senderId: req.account.uid,
           text: text.trim(),
           createdAt: timestamp,
         };

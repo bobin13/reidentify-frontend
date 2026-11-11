@@ -756,7 +756,7 @@ export default function HomeScreen() {
       >
         <View style={styles.notificationOverlay}>
           <Pressable
-            style={StyleSheet.absoluteFillObject}
+            style={StyleSheet.absoluteFill}
             accessible={false}
             onPress={() =>
               setNotificationsOpen(false)
