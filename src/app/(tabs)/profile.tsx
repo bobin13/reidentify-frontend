@@ -7,6 +7,7 @@ import {
 } from "react";
 
 import { useFocusEffect } from "expo-router";
+import { Image as ExpoImage } from "expo-image";
 import { SymbolView } from "expo-symbols";
 
 import {
@@ -75,6 +76,42 @@ const GENDER_OPTIONS = [
   "Man",
   "Non-binary",
 ] as const;
+
+type AvatarAsset = number | { uri: string };
+type AvatarPreview = AvatarAsset | string;
+
+const PROFILE_AVATARS: ReadonlyArray<{
+  id: string;
+  label: string;
+  source: AvatarAsset;
+}> = [
+  {
+    id: "mint",
+    label: "Silver hair on a mint background",
+    source: require("../../../assets/images/profile-avatars/mint.jpg"),
+  },
+  {
+    id: "amber",
+    label: "Glasses and gray beard on an amber background",
+    source: require("../../../assets/images/profile-avatars/amber.jpg"),
+  },
+  {
+    id: "periwinkle",
+    label: "Dark hair with a silver streak on a periwinkle background",
+    source: require("../../../assets/images/profile-avatars/periwinkle.jpg"),
+  },
+  {
+    id: "rose",
+    label: "Curly gray hair and glasses on a rose background",
+    source: require("../../../assets/images/profile-avatars/rose.jpg"),
+  },
+];
+
+type PhotoSelection =
+  | { kind: "upload"; jpeg: string }
+  | { kind: "preset"; source: AvatarAsset };
+
+type PhotoDraft = (PhotoSelection & { requestId: string }) | { kind: "remove" };
 
 export default function ProfileScreen() {
   const { colors } = useAppTheme();
@@ -174,23 +211,41 @@ export default function ProfileScreen() {
         ]}
         showsVerticalScrollIndicator={false}
       >
-        <View style={styles.brandRow}>
-          <View style={styles.brandIdentity}>
-            <View style={styles.logo}>
-              <Text style={styles.logoText}>R</Text>
+        <View
+          style={user ? styles.overviewHeader : styles.brandRow}
+        >
+          {user ? (
+            <>
+              <View
+                style={styles.overviewBrandSlot}
+                accessibilityElementsHidden
+                importantForAccessibility="no-hide-descendants"
+              >
+                <View style={styles.overviewBrandMark}>
+                  <Text style={styles.overviewBrandText}>R</Text>
+                </View>
+              </View>
+              <Text
+                accessibilityRole="header"
+                style={styles.overviewTitle}
+              >
+                Profile
+              </Text>
+            </>
+          ) : (
+            <View style={styles.brandIdentity}>
+              <View style={styles.logo}>
+                <Text style={styles.logoText}>R</Text>
+              </View>
+              <Text style={styles.brandText}>ReIdentify</Text>
             </View>
-
-            <Text style={styles.brandText}>
-              ReIdentify
-            </Text>
-          </View>
-
+          )}
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Open settings"
             onPress={() => setPage("settings")}
             style={({ pressed }) => [
-              styles.settingsButton,
+              user ? styles.overviewSettingsButton : styles.settingsButton,
               pressed && styles.pressed,
             ]}
           >
@@ -201,14 +256,11 @@ export default function ProfileScreen() {
                 web: "settings",
               }}
               size={20}
-              tintColor={colors.accent}
+              tintColor={user ? colors.text : colors.accent}
               accessibilityElementsHidden
               importantForAccessibility="no-hide-descendants"
             />
-
-            <Text style={styles.settingsText}>
-              Settings
-            </Text>
+            {!user && <Text style={styles.settingsText}>Settings</Text>}
           </Pressable>
         </View>
 
@@ -238,122 +290,103 @@ export default function ProfileScreen() {
 
         {user ? (
           <>
-            <Text
-              accessibilityRole="header"
-              style={styles.pageTitle}
-            >
-              My profile
-            </Text>
-
-            <View style={styles.profileCard}>
-              <View style={styles.profileIdentity}>
-                <ProfileAvatar profile={user} />
-
-                <View style={styles.profileCopy}>
-                  <Text style={styles.name}>
-                    {user.fullName}
+            <View style={styles.overviewHero}>
+              <View style={styles.overviewPortrait}>
+                <ProfileAvatar profile={user} large />
+                <View style={styles.overviewBadge}>
+                  <Text style={styles.overviewVisibility}>
+                    {user.profileVisibility === "public"
+                      ? "Public profile"
+                      : "Private profile"}
                   </Text>
-
-                  <Text style={styles.subtitle}>
-                    {areaLabel(
-                      resolveArea(user.location),
-                    ) ||
-                      user.area ||
-                      "Choose your area"}
-                  </Text>
-
-                  <View style={styles.profileMeta}>
-                    {user.age != null && (
-                      <Text
-                        style={styles.profileMetaText}
-                      >
-                        Age {user.age}
-                      </Text>
-                    )}
-
-                    <Text
-                      selectable
-                      style={styles.profileMetaText}
-                    >
-                      {user.email}
-                    </Text>
-                  </View>
-
-                  {!!user.gender && (
-                    <Text
-                      style={styles.profileMetaText}
-                    >
-                      {user.gender}
-                    </Text>
-                  )}
                 </View>
               </View>
 
-              <Text style={styles.accentText}>
-                {user.profileVisibility === "public"
-                  ? "Public profile"
-                  : "Private profile"}
-              </Text>
+              <View style={styles.overviewIdentity}>
+                <Text style={styles.overviewName}>{user.fullName}</Text>
+                <Text selectable style={styles.overviewEmail}>
+                  {user.email}
+                </Text>
+                <Text style={styles.overviewMeta}>
+                  {areaLabel(resolveArea(user.location)) ||
+                    user.area ||
+                    "Choose your area"}
+                </Text>
+                {(user.age != null || !!user.gender) && (
+                  <Text style={styles.overviewMeta}>
+                    {[
+                      user.age != null ? `Age ${user.age}` : "",
+                      user.gender,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </Text>
+                )}
+              </View>
 
               <Pressable
                 accessibilityRole="button"
                 onPress={() => setPage("edit")}
                 style={({ pressed }) => [
-                  styles.primaryButton,
                   styles.editProfileButton,
                   pressed && styles.pressed,
                 ]}
               >
-                <Text
-                  style={styles.editProfileButtonText}
-                >
-                  Edit profile
-                </Text>
+                <SymbolView
+                  name={{
+                    ios: "pencil",
+                    android: "edit",
+                    web: "edit",
+                  }}
+                  size={17}
+                  tintColor={colors.text}
+                  accessibilityElementsHidden
+                  importantForAccessibility="no-hide-descendants"
+                />
+                <Text style={styles.editProfileButtonText}>Edit profile</Text>
               </Pressable>
             </View>
 
-            <View style={styles.detailCard}>
+            <View style={styles.overviewSection}>
               <Text
                 accessibilityRole="header"
-                style={styles.sectionTitle}
+                style={styles.overviewSectionTitle}
               >
-                About me
+                About
               </Text>
-
-              <Text style={styles.description}>
-                {user.aboutMe?.trim() ||
-                  "Add a little about yourself in Edit profile."}
-              </Text>
+              <View style={styles.overviewDetail}>
+                <Text style={styles.overviewDescription}>
+                  {user.aboutMe?.trim() ||
+                    "Add a little about yourself in Edit profile."}
+                </Text>
+              </View>
             </View>
 
-            <View style={styles.detailCard}>
+            <View style={styles.overviewSection}>
               <Text
                 accessibilityRole="header"
-                style={styles.sectionTitle}
+                style={styles.overviewSectionTitle}
               >
-                Your interests
+                Interests
               </Text>
-
-              {user.interests.length > 0 ? (
-                <View style={styles.interestWrap}>
-                  {user.interests.map((interest) => (
-                    <View
-                      key={interest}
-                      style={styles.interestChip}
-                    >
-                      <Text
-                        style={styles.interestText}
+              <View style={styles.overviewDetail}>
+                {user.interests.length > 0 ? (
+                  <View style={styles.interestWrap}>
+                    {user.interests.map((interest) => (
+                      <View
+                        key={interest}
+                        style={[styles.interestChip, styles.overviewChip]}
                       >
-                        {interest}
-                      </Text>
-                    </View>
-                  ))}
-                </View>
-              ) : (
-                <Text style={styles.description}>
-                  Choose your interests in Search.
-                </Text>
-              )}
+                        <Text style={styles.interestText}>{interest}</Text>
+                      </View>
+                    ))}
+                  </View>
+                ) : (
+                  <Text style={styles.overviewDescription}>
+                    Choose your interests in Search.
+                  </Text>
+                )}
+              </View>
             </View>
           </>
         ) : (
@@ -514,13 +547,15 @@ export default function ProfileScreen() {
 
 function ProfileAvatar({
   profile,
-  previewUri,
+  preview,
+  large = false,
 }: {
   profile: Pick<
     AppUser,
     "id" | "fullName" | "photoVersion"
   >;
-  previewUri?: string;
+  preview?: AvatarPreview;
+  large?: boolean;
 }) {
   const { colors } = useAppTheme();
   const { user } = useAuth();
@@ -539,14 +574,14 @@ function ProfileAvatar({
     uri: "",
   });
 
-  const [failedUri, setFailedUri] = useState("");
+  const [failedSource, setFailedSource] = useState<AvatarPreview>("");
 
   useEffect(() => {
     let active = true;
     const account = auth.currentUser;
 
     if (
-      previewUri !== undefined ||
+      preview !== undefined ||
       !profile.photoVersion ||
       !account ||
       account.uid !== viewer
@@ -586,30 +621,35 @@ function ProfileAvatar({
     viewer,
     profile.id,
     profile.photoVersion,
-    previewUri,
+    preview,
   ]);
 
   const candidate =
-    previewUri !== undefined
-      ? previewUri
+    preview !== undefined
+      ? preview
       : image.key === key
         ? image.uri
         : "";
 
-  const uri =
-    candidate === failedUri ? "" : candidate;
+  const source =
+    candidate === failedSource ? "" : candidate;
 
   return (
-    <View style={styles.avatar}>
-      {uri ? (
+    <View style={[styles.avatar, large && styles.overviewAvatar]}>
+      {source ? (
         <Image
-          source={{ uri }}
-          style={styles.avatarImage}
+          source={typeof source === "string" ? { uri: source } : source}
+          style={[
+            styles.avatarImage,
+            large && styles.overviewAvatarImage,
+          ]}
           accessibilityLabel={`${profile.fullName}'s profile photo`}
-          onError={() => setFailedUri(candidate)}
+          onError={() => setFailedSource(candidate)}
         />
       ) : (
-        <Text style={styles.avatarText}>
+        <Text
+          style={[styles.avatarText, large && styles.overviewAvatarText]}
+        >
           {getInitials(profile.fullName)}
         </Text>
       )}
@@ -696,7 +736,7 @@ function ProfilePreview({
           {!!user.aboutMe && (
             <>
               <Text style={styles.sectionTitle}>
-                About me
+                About
               </Text>
 
               <Text style={styles.description}>
@@ -1308,7 +1348,7 @@ function EditProfile({
     useState(false);
 
   const [photo, setPhoto] =
-    useState<ProfilePhotoChange | null>(null);
+    useState<PhotoDraft | null>(null);
 
   const [choosing, setChoosing] =
     useState(false);
@@ -1323,6 +1363,15 @@ function EditProfile({
       alive.current = false;
     };
   }, []);
+
+  function stagePhoto(selection: PhotoSelection) {
+    setError("");
+    setPhoto({
+      ...selection,
+      requestId:
+        `photo-${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`,
+    });
+  }
 
   async function choosePhoto() {
     if (picking.current || saving) return;
@@ -1413,12 +1462,7 @@ function EditProfile({
         alive.current &&
         auth.currentUser?.uid === user.id
       ) {
-        setPhoto({
-          kind: "upload",
-          jpeg: image.base64,
-          requestId:
-            `photo-${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`,
-        });
+        stagePhoto({ kind: "upload", jpeg: image.base64 });
       }
     } catch (error) {
       if (alive.current) {
@@ -1492,6 +1536,27 @@ function EditProfile({
     setSaving(true);
 
     try {
+      let photoChange: ProfilePhotoChange | null;
+      if (photo?.kind === "preset") {
+        const source = await ExpoImage.loadAsync(photo.source);
+        const rendered = await ImageManipulator.manipulate(source).renderAsync();
+        const image = await rendered.saveAsync({
+          format: SaveFormat.JPEG,
+          compress: 0.8,
+          base64: true,
+        });
+        if (!image.base64) throw new Error("Could not prepare the avatar.");
+        photoChange = {
+          kind: "upload",
+          jpeg: image.base64,
+          requestId: photo.requestId,
+        };
+      } else {
+        photoChange = photo;
+      }
+
+      if (!alive.current || auth.currentUser?.uid !== user.id) return;
+
       const result = await updateProfile({
         fullName,
         area: [
@@ -1514,9 +1579,9 @@ function EditProfile({
         return;
       }
 
-      if (photo) {
+      if (photoChange) {
         const changed =
-          await changeProfilePhoto(photo);
+          await changeProfilePhoto(photoChange);
 
         if (!alive.current) return;
 
@@ -1589,52 +1654,77 @@ function EditProfile({
           <View style={styles.photoEditor}>
             <ProfileAvatar
               profile={user}
-              previewUri={
-                photo?.kind === "upload"
-                  ? `data:image/jpeg;base64,${photo.jpeg}`
-                  : photo?.kind === "remove"
-                    ? ""
-                    : undefined
+              preview={
+                photo?.kind === "preset"
+                  ? photo.source
+                  : photo?.kind === "upload"
+                    ? `data:image/jpeg;base64,${photo.jpeg}`
+                    : photo?.kind === "remove"
+                      ? ""
+                      : undefined
               }
             />
 
-            <Pressable
-              accessibilityRole="button"
-              disabled={saving || choosing}
-              onPress={() =>
-                void choosePhoto()
-              }
-              style={styles.outlineButton}
-            >
-              <Text
-                style={styles.outlineButtonText}
-              >
-                {choosing
-                  ? "Preparing photo…"
-                  : "Choose photo"}
-              </Text>
-            </Pressable>
+            <Text accessibilityRole="header" style={styles.menuTitle}>
+              Choose an avatar
+            </Text>
+            <View style={styles.avatarChoices}>
+              {PROFILE_AVATARS.map((avatar) => {
+                const selected =
+                  photo?.kind === "preset" && photo.source === avatar.source;
 
-            {(user.photoVersion ||
-              photo?.kind === "upload") &&
-              photo?.kind !== "remove" && (
-                <Pressable
-                  accessibilityRole="button"
-                  disabled={saving || choosing}
-                  onPress={() =>
-                    setPhoto({
-                      kind: "remove",
-                    })
-                  }
-                  style={styles.backButton}
-                >
-                  <Text
-                    style={styles.accentText}
+                return (
+                  <Pressable
+                    key={avatar.id}
+                    accessibilityRole="radio"
+                    accessibilityLabel={avatar.label}
+                    accessibilityState={{ checked: selected, disabled: saving || choosing }}
+                    disabled={saving || choosing}
+                    onPress={() => stagePhoto({ kind: "preset", source: avatar.source })}
+                    style={({ pressed }) => [
+                      styles.avatarChoice,
+                      selected && styles.avatarChoiceSelected,
+                      pressed && styles.pressed,
+                    ]}
                   >
-                    Remove photo
-                  </Text>
-                </Pressable>
-              )}
+                    <Image
+                      source={avatar.source}
+                      style={styles.avatarChoiceImage}
+                    />
+                    {selected && (
+                      <View style={styles.avatarCheck} importantForAccessibility="no">
+                        <Text style={styles.avatarCheckText}>✓</Text>
+                      </View>
+                    )}
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            <View style={styles.photoActions}>
+              <Pressable
+                accessibilityRole="button"
+                disabled={saving || choosing}
+                onPress={() => void choosePhoto()}
+                style={({ pressed }) => [styles.photoAction, pressed && styles.pressed]}
+              >
+                <Text style={styles.photoActionText}>
+                  {choosing ? "Preparing photo…" : "Choose photo from phone"}
+                </Text>
+              </Pressable>
+
+              {(user.photoVersion || photo?.kind === "upload" || photo?.kind === "preset") &&
+                photo?.kind !== "remove" && (
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={saving || choosing}
+                    onPress={() => setPhoto({ kind: "remove" })}
+                    style={({ pressed }) => [styles.photoAction, pressed && styles.pressed]}
+                  >
+                    <Text style={styles.photoActionText}>Remove photo</Text>
+                  </Pressable>
+                )}
+            </View>
           </View>
 
           <View style={styles.editFields}>
@@ -1704,11 +1794,11 @@ function EditProfile({
 
             <View style={styles.section}>
               <Text style={styles.menuTitle}>
-                About me
+                About
               </Text>
 
               <TextInput
-                accessibilityLabel="About me"
+                accessibilityLabel="About"
                 multiline
                 textAlignVertical="top"
                 maxLength={1000}
@@ -1747,7 +1837,7 @@ function EditProfile({
 
               <Text style={styles.description}>
                 {isPublic
-                  ? "Other signed-in members can see your photo, About me, interests, age, gender and area. Your email stays private."
+                  ? "Other signed-in members can see your photo, bio, interests, age, gender and area. Your email stays private."
                   : "Only you can open your full profile. Your name and general area can still appear in member lists and chats."}
               </Text>
 
@@ -1876,8 +1966,35 @@ function createStyles(colors: AppColors) {
       paddingBottom: 36,
       gap: 20,
     },
-    signedInContent: {
-      flexGrow: 1,
+    signedInContent: { flexGrow: 1, paddingTop: 10, paddingBottom: 24, gap: 18 },
+    overviewHeader: { flexDirection: "row", alignItems: "center", gap: 12 },
+    overviewBrandSlot: { width: 48, alignItems: "center" },
+    overviewBrandMark: {
+      width: 34,
+      height: 34,
+      borderRadius: 12,
+      backgroundColor: colors.surface,
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    overviewBrandText: { color: colors.accent, fontSize: 17, fontWeight: "700" },
+    overviewTitle: {
+      flex: 1,
+      minWidth: 0,
+      color: colors.text,
+      fontSize: 18,
+      fontWeight: "600",
+      textAlign: "center",
+    },
+    overviewSettingsButton: {
+      width: 48,
+      height: 48,
+      borderRadius: 24,
+      borderWidth: 1,
+      borderColor: colors.border,
+      backgroundColor: colors.surface,
+      justifyContent: "center",
+      alignItems: "center",
     },
     pageTitle: {
       color: colors.text,
@@ -2038,14 +2155,78 @@ function createStyles(colors: AppColors) {
       fontSize: 16,
       lineHeight: 24,
     },
-    profileCard: {
+    overviewHero: { alignItems: "center", gap: 12, paddingBottom: 4 },
+    overviewPortrait: { alignItems: "center", maxWidth: "100%" },
+    overviewAvatar: {
+      width: 86,
+      height: 86,
+      borderRadius: 43,
+      borderWidth: 2,
+      borderColor: colors.accent,
+      overflow: "hidden",
+    },
+    overviewAvatarImage: { borderRadius: 41 },
+    overviewAvatarText: { fontSize: 30 },
+    overviewBadge: {
+      marginTop: -7,
+      maxWidth: "100%",
       backgroundColor: colors.surface,
-      borderRadius: 20,
+      borderColor: colors.border,
+      borderWidth: 1,
+      borderRadius: 12,
+      paddingHorizontal: 10,
+      paddingVertical: 3,
+    },
+    overviewVisibility: {
+      color: colors.accent,
+      fontSize: 12,
+      fontWeight: "600",
+      textAlign: "center",
+    },
+    overviewIdentity: { width: "100%", alignItems: "stretch", gap: 4 },
+    overviewName: {
+      color: colors.text,
+      fontSize: 26,
+      fontWeight: "600",
+      letterSpacing: -0.4,
+      textAlign: "center",
+    },
+    overviewEmail: { color: colors.muted, fontSize: 15, textAlign: "center" },
+    overviewMeta: { color: colors.muted, fontSize: 15, textAlign: "center" },
+    editProfileButton: {
+      minHeight: 48,
+      maxWidth: "100%",
+      paddingHorizontal: 18,
+      paddingVertical: 8,
+      borderRadius: 24,
       borderWidth: 1,
       borderColor: colors.border,
-      padding: 20,
-      gap: 12,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 8,
     },
+    editProfileButtonText: {
+      color: colors.text,
+      fontSize: 15,
+      fontWeight: "600",
+      flexShrink: 1,
+    },
+    overviewSection: { gap: 8 },
+    overviewSectionTitle: {
+      color: colors.text,
+      fontSize: 16,
+      fontWeight: "600",
+      paddingHorizontal: 2,
+    },
+    overviewDetail: {
+      backgroundColor: colors.surface,
+      borderRadius: 16,
+      paddingHorizontal: 14,
+      paddingVertical: 13,
+    },
+    overviewDescription: { color: colors.muted, fontSize: 16, lineHeight: 23 },
+    overviewChip: { maxWidth: "100%", paddingHorizontal: 10, paddingVertical: 5 },
     profileIdentity: {
       flexDirection: "row",
       alignItems: "center",
@@ -2054,32 +2235,6 @@ function createStyles(colors: AppColors) {
     profileCopy: {
       flex: 1,
       gap: 6,
-    },
-    profileMeta: {
-      flexDirection: "row",
-      flexWrap: "wrap",
-      alignItems: "baseline",
-      columnGap: 10,
-      rowGap: 0,
-    },
-    profileMetaText: {
-      color: colors.muted,
-      fontSize: 16,
-      lineHeight: 22,
-      flexShrink: 1,
-    },
-    editProfileButton: {
-      width: "50%",
-      alignSelf: "flex-start",
-      minHeight: 44,
-      paddingHorizontal: 12,
-      paddingVertical: 10,
-      borderRadius: 12,
-    },
-    editProfileButtonText: {
-      color: colors.background,
-      fontSize: 16,
-      fontWeight: "700",
     },
     interestWrap: {
       flexDirection: "row",
@@ -2211,6 +2366,58 @@ function createStyles(colors: AppColors) {
       alignItems: "center",
       gap: 12,
     },
+    avatarChoices: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      justifyContent: "center",
+      gap: 10,
+    },
+    avatarChoice: {
+      width: 60,
+      height: 60,
+      borderRadius: 30,
+      borderWidth: 2,
+      borderColor: colors.border,
+      padding: 2,
+    },
+    avatarChoiceSelected: { borderColor: colors.accent },
+    avatarChoiceImage: { width: "100%", height: "100%", borderRadius: 26 },
+    avatarCheck: {
+      position: "absolute",
+      right: -2,
+      bottom: -2,
+      width: 20,
+      height: 20,
+      borderRadius: 10,
+      backgroundColor: colors.accent,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    avatarCheckText: {
+      color: colors.background,
+      fontSize: 12,
+      fontWeight: "700",
+      includeFontPadding: false,
+    },
+    photoActions: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      justifyContent: "center",
+      columnGap: 12,
+    },
+    photoAction: {
+      maxWidth: "100%",
+      minHeight: 48,
+      justifyContent: "center",
+      paddingHorizontal: 4,
+      paddingVertical: 8,
+    },
+    photoActionText: {
+      color: colors.accent,
+      fontSize: 15,
+      fontWeight: "600",
+      textAlign: "center",
+    },
     aboutInput: {
       minHeight: 150,
       borderWidth: 1,
@@ -2296,23 +2503,17 @@ function createStyles(colors: AppColors) {
       borderBottomColor: colors.border,
     },
     signOutButton: {
-      minHeight: 56,
+      minHeight: 48,
       borderRadius: 14,
       borderWidth: 1,
       borderColor: colors.border,
       justifyContent: "center",
       alignItems: "center",
-      padding: 14,
+      paddingHorizontal: 14,
+      paddingVertical: 9,
     },
-    signOutText: {
-      color: colors.accent,
-      fontSize: 17,
-      fontWeight: "700",
-    },
-    accountFooter: {
-      marginTop: "auto",
-      paddingTop: 12,
-    },
+    signOutText: { color: colors.accent, fontSize: 15, fontWeight: "600" },
+    accountFooter: { paddingTop: 2 },
     pressed: {
       opacity: 0.75,
     },

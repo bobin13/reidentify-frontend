@@ -1184,6 +1184,39 @@ function installGroupRoutes(app, db, { clock = Date.now } = {}) {
     }),
   );
 
+  // Small per-account fingerprints so the Map tab can reuse a completed view
+  // until a membership changes or any member group's events change. Derived
+  // from event rows, so saves, cancellations and purges all move `version`.
+  app.get(
+    "/api/map/group-version",
+    route(async (req, res) => {
+      const user = await identity(db, req);
+      const { rows } = await db.query(
+        `SELECT g.id::text AS id,
+                COUNT(e.id) FILTER (WHERE e.status = 'published')::int AS published,
+                COALESCE(MAX(e.updated_at), 'epoch'::timestamptz) AS changed_at
+           FROM group_memberships m
+           JOIN community_groups g ON g.id = m.group_id
+           LEFT JOIN group_events e ON e.group_id = g.id
+          WHERE m.user_id = $1 AND m.status = 'active' AND g.status = 'active'
+          GROUP BY g.id
+          ORDER BY g.id`,
+        [user.id],
+      );
+      const ids = rows.map((row) => row.id);
+      const revisions = rows.map((row) => [
+        row.id,
+        iso(row.changed_at) || "",
+        Number(row.published) || 0,
+      ]);
+      res.set("Cache-Control", "no-store");
+      res.json({
+        version: hash(req.account.uid, revisions).slice(0, 24),
+        membership: hash(req.account.uid, ids).slice(0, 24),
+      });
+    }),
+  );
+
   app.get(
     "/api/groups/:id/events",
     route(async (req, res) => {
@@ -1277,6 +1310,29 @@ function installGroupRoutes(app, db, { clock = Date.now } = {}) {
           fail(400, "Choose a future start time for a new event.");
         if (old && old.creator_id !== user.id)
           fail(403, "You can change only your own events.");
+        // One row lock per account serializes saves made in different groups,
+        // so two concurrent saves cannot both pass the limit below.
+        await client.query("SELECT id FROM users WHERE id = $1 FOR UPDATE", [
+          user.id,
+        ]);
+        const existingActive =
+          !!old &&
+          old.status === "published" &&
+          milliseconds(old.ends_at) > clock();
+        if (!existingActive) {
+          const { rows: activeRows } = await client.query(
+            `SELECT count(*)::int AS count
+               FROM group_events
+              WHERE creator_id = $1 AND status = 'published' AND ends_at > $2
+                AND id <> $3`,
+            [user.id, new Date(clock()), old?.id || id],
+          );
+          if ((Number(activeRows[0]?.count) || 0) >= 2)
+            fail(
+              409,
+              "You can have up to 2 upcoming or ongoing events across all your groups. Cancel an event or wait for one to finish before creating another.",
+            );
+        }
         const latestEnd = Math.max(
           end,
           await futureEnd(client, value.id, clock(), old?.id || id),
