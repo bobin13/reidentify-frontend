@@ -157,6 +157,9 @@ export const INTEREST_CATEGORIES = [
   },
 ] as const;
 
+// Fewest interests an account must choose before using the app.
+export const MIN_INTERESTS = 3;
+
 export type InterestCategory =
   (typeof INTEREST_CATEGORIES)[number];
 

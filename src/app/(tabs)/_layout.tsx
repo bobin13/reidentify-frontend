@@ -7,6 +7,10 @@ import { useAuth } from "../../context/auth-context";
 import { useAppTheme } from "../../context/theme-context";
 import { groupRequest, type CommunityGroup } from "../../lib/groups";
 import { getChats } from "../../lib/messaging";
+import {
+  InterestsOnboarding,
+  needsInterestOnboarding,
+} from "../../components/interests-onboarding";
 
 export default function TabLayout() {
   const { colors } = useAppTheme();
@@ -66,6 +70,11 @@ export default function TabLayout() {
       subscription.remove();
     };
   }, [uid]);
+
+  // New accounts choose their first interests before seeing the tabs.
+  if (needsInterestOnboarding(user)) {
+    return <InterestsOnboarding key={user.id} user={user} />;
+  }
 
   return (
     <Tabs

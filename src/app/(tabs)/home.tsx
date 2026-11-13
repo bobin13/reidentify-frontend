@@ -35,12 +35,16 @@ import {
 } from "../../lib/news-images";
 import {
   fetchAreaNews,
+  fetchInterestNews,
+  type InterestNewsResult,
   type NewsArticle,
   type NewsResult,
 } from "../../lib/news";
+import { auth } from "../../lib/firebase";
 
 const NEWS_FILTERS = [
   { id: "all", label: "Latest" },
+  { id: "foryou", label: "For you" },
   { id: "community", label: "Community" },
   { id: "health", label: "Health & safety" },
   { id: "culture", label: "Culture & learning" },
@@ -55,6 +59,34 @@ type NewsState = {
   loading: boolean;
   refreshing: boolean;
 };
+
+// Interest-based stories live outside the local feed: they are paged by
+// the server ten at a time and appended on "Load more".
+type InterestState = {
+  owner: string;
+  articles: NewsArticle[];
+  nextOffset: number | null;
+  topics: InterestNewsResult["topics"];
+  notice: string | null;
+  loading: boolean;
+  loadingMore: boolean;
+  error: string | null;
+  loaded: boolean;
+};
+
+function emptyInterest(owner: string): InterestState {
+  return {
+    owner,
+    articles: [],
+    nextOffset: null,
+    topics: [],
+    notice: null,
+    loading: false,
+    loadingMore: false,
+    error: null,
+    loaded: false,
+  };
+}
 
 async function openArticle(article: NewsArticle) {
   try {
@@ -135,6 +167,86 @@ export default function HomeScreen() {
   >({});
 
   const request = useRef<AbortController | null>(null);
+
+  const uid = user?.id ?? "";
+  const [interest, setInterest] = useState<InterestState>(() =>
+    emptyInterest(""),
+  );
+  const interestRequest = useRef<AbortController | null>(null);
+
+  const loadInterestNews = useCallback(
+    async (offset: number) => {
+      const account = auth.currentUser;
+      if (!uid || !account || account.uid !== uid) return;
+
+      interestRequest.current?.abort();
+      const controller = new AbortController();
+      interestRequest.current = controller;
+
+      setInterest((old) => ({
+        ...(old.owner === uid ? old : emptyInterest(uid)),
+        owner: uid,
+        loading: offset === 0,
+        loadingMore: offset > 0,
+        error: null,
+      }));
+
+      try {
+        const page = await fetchInterestNews(account, offset);
+
+        if (
+          controller.signal.aborted ||
+          interestRequest.current !== controller
+        ) {
+          return;
+        }
+
+        setInterest((old) => {
+          const kept =
+            old.owner === uid && offset > 0 ? old.articles : [];
+          const seen = new Set(kept.map((item) => item.id));
+
+          return {
+            owner: uid,
+            articles: [
+              ...kept,
+              ...page.articles.filter((item) => !seen.has(item.id)),
+            ],
+            nextOffset: page.nextOffset,
+            topics: page.topics,
+            notice: page.notice,
+            loading: false,
+            loadingMore: false,
+            error: null,
+            loaded: true,
+          };
+        });
+      } catch (error) {
+        if (
+          controller.signal.aborted ||
+          interestRequest.current !== controller
+        ) {
+          return;
+        }
+
+        setInterest((old) => ({
+          ...(old.owner === uid ? old : emptyInterest(uid)),
+          owner: uid,
+          loading: false,
+          loadingMore: false,
+          error:
+            error instanceof Error
+              ? error.message
+              : "News is unavailable. Please try again.",
+        }));
+      } finally {
+        if (interestRequest.current === controller) {
+          interestRequest.current = null;
+        }
+      }
+    },
+    [uid],
+  );
 
   const styles = useMemo(
     () => createStyles(colors, theme === "dark"),
@@ -241,6 +353,12 @@ export default function HomeScreen() {
   }, [scopeKey]);
 
   const matches = useMemo(() => {
+    if (filter === "foryou") {
+      return (interest.owner === uid ? interest.articles : []).map(
+        (article) => ({ ...article, hidePhoto: false }),
+      );
+    }
+
     const seen = new Set<string>();
 
     return (result?.articles ?? [])
@@ -271,7 +389,7 @@ export default function HomeScreen() {
           Number(!!b.imageUrl && !b.hidePhoto) -
           Number(!!a.imageUrl && !a.hidePhoto),
       );
-  }, [result, filter]);
+  }, [result, filter, interest, uid]);
 
   const displayPhotos = useMemo(() => {
     const seen = new Set<string>();
@@ -305,8 +423,8 @@ export default function HomeScreen() {
   }, [matches, previewImages]);
 
   const visibleArticles = useMemo(
-    () => matches.slice(0, visibleCount),
-    [matches, visibleCount],
+    () => (filter === "foryou" ? matches : matches.slice(0, visibleCount)),
+    [matches, visibleCount, filter],
   );
 
   useEffect(() => {
@@ -397,6 +515,36 @@ export default function HomeScreen() {
   const updatedAt = result?.checkedAt
     ? new Date(result.checkedAt)
     : null;
+
+  const forYou = filter === "foryou";
+  const interestReady = interest.owner === uid;
+  const feedLoading = forYou
+    ? interestReady
+      ? interest.loading
+      : !!uid
+    : loading;
+  const feedRetrying = forYou ? interest.loading : refreshing;
+  const feedProblem = forYou
+    ? interestReady
+      ? interest.error
+      : null
+    : problem;
+  const feedNotice = forYou
+    ? interestReady && interest.topics.length
+      ? interest.notice
+      : null
+    : result?.notice;
+  const feedEmptyText = forYou
+    ? interest.topics.length
+      ? "Nothing new for your interests right now. Check back later."
+      : interest.notice ||
+        "Add interests in Search to see news picked for you."
+    : result?.articles.length
+      ? "Try Latest to see the other recent updates."
+      : "The feeds have no recent articles available. Try refreshing later.";
+  const interestNames = [
+    ...new Set(interest.topics.flatMap((topic) => topic.interests)),
+  ];
 
   return (
     <View style={styles.safeArea}>
@@ -510,7 +658,9 @@ export default function HomeScreen() {
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={styles.filters}
           >
-            {NEWS_FILTERS.map((option) => (
+            {NEWS_FILTERS.filter(
+              (option) => option.id !== "foryou" || !!user,
+            ).map((option) => (
               <Pressable
                 key={option.id}
                 accessibilityRole="button"
@@ -522,6 +672,15 @@ export default function HomeScreen() {
                 onPress={() => {
                   setFilter(option.id);
                   setVisibleCount(6);
+                  if (
+                    option.id === "foryou" &&
+                    !(
+                      interest.owner === uid &&
+                      (interest.loaded || interest.loading)
+                    )
+                  ) {
+                    void loadInterestNews(0);
+                  }
                 }}
                 style={[
                   styles.filterChip,
@@ -542,19 +701,21 @@ export default function HomeScreen() {
             ))}
           </ScrollView>
 
-          {loading && (
+          {feedLoading && (
             <View style={styles.newsState}>
               <ActivityIndicator
                 color={colors.accent}
               />
 
               <Text style={styles.newsDescription}>
-                Loading {title}…
+                {forYou
+                  ? "Finding news for your interests… this can take a few seconds."
+                  : `Loading ${title}…`}
               </Text>
             </View>
           )}
 
-          {(problem || result?.notice) && (
+          {(feedProblem || feedNotice) && (
             <View
               accessibilityLiveRegion="polite"
               style={styles.newsState}
@@ -564,20 +725,24 @@ export default function HomeScreen() {
               </Text>
 
               <Text style={styles.newsDescription}>
-                {problem || result?.notice}
+                {feedProblem || feedNotice}
               </Text>
 
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel="Retry news"
-                disabled={refreshing}
-                onPress={() => void loadNews()}
+                disabled={feedRetrying}
+                onPress={() =>
+                  void (forYou
+                    ? loadInterestNews(0)
+                    : loadNews())
+                }
                 style={styles.retryButton}
               >
                 <Text
                   style={styles.selectedFilterText}
                 >
-                  {refreshing
+                  {feedRetrying
                     ? "Trying again…"
                     : "Try again"}
                 </Text>
@@ -585,7 +750,7 @@ export default function HomeScreen() {
             </View>
           )}
 
-          {!loading &&
+          {!feedLoading &&
             visibleArticles.map((article) => (
               <Pressable
                 key={article.id}
@@ -659,18 +824,18 @@ export default function HomeScreen() {
               </Pressable>
             ))}
 
-          {!loading &&
+          {!feedLoading &&
             !visibleArticles.length &&
-            !(problem && !result?.articles.length) && (
+            !(forYou
+              ? feedProblem || !interestReady || !interest.loaded
+              : problem && !result?.articles.length) && (
               <View style={styles.newsState}>
                 <Text style={styles.newsStateTitle}>
                   No matching news right now
                 </Text>
 
                 <Text style={styles.newsDescription}>
-                  {result?.articles.length
-                    ? "Try Latest to see the other recent updates."
-                    : "The feeds have no recent articles available. Try refreshing later."}
+                  {feedEmptyText}
                 </Text>
 
                 {filter !== "all" && (
@@ -693,24 +858,46 @@ export default function HomeScreen() {
               </View>
             )}
 
-          {!loading &&
-            matches.length > visibleCount && (
+          {!feedLoading &&
+            (forYou
+              ? interest.nextOffset !== null
+              : matches.length > visibleCount) && (
               <Pressable
                 accessibilityRole="button"
+                accessibilityState={{
+                  disabled: forYou && interest.loadingMore,
+                  busy: forYou && interest.loadingMore,
+                }}
+                disabled={forYou && interest.loadingMore}
                 onPress={() =>
-                  setVisibleCount(
-                    (count) => count + 6,
-                  )
+                  forYou
+                    ? void loadInterestNews(interest.nextOffset ?? 0)
+                    : setVisibleCount((count) => count + 6)
                 }
                 style={styles.moreNewsButton}
               >
                 <Text style={styles.sectionLink}>
-                  Show more news
+                  {forYou
+                    ? interest.loadingMore
+                      ? "Loading more…"
+                      : "Load more"
+                    : "Show more news"}
                 </Text>
               </Pressable>
             )}
 
-          {updatedAt && (
+          {forYou &&
+            interestReady &&
+            interest.loaded &&
+            interestNames.length > 0 && (
+              <Text style={styles.newsDate}>
+                Picked from your interests:{" "}
+                {interestNames.slice(0, 6).join(", ")}
+                {interestNames.length > 6 ? " and more" : ""}
+              </Text>
+            )}
+
+          {!forYou && updatedAt && (
             <Text style={styles.newsDate}>
               Last checked{" "}
               {updatedAt.toLocaleTimeString("en-CA", {

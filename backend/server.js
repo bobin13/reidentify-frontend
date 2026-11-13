@@ -4,6 +4,7 @@ require("dotenv").config({
   quiet: true,
 });
 const { installNewsRoutes } = require("./news-routes");
+const { installInterestNewsRoutes } = require("./interest-news-routes");
 const { installGroupRoutes, startGroupCleanup } = require("./groups-routes");
 const { installEventRoutes } = require("./events-routes");
 const { startExternalEventSync } = require("./external-events");
@@ -377,6 +378,7 @@ function createApp({ db, firebaseAuth }) {
   installProfileRoutes(app, db, { toOwner: ownerProfile });
   installPlaceRoutes(app);
   installNewsRoutes(app);
+  installInterestNewsRoutes(app, db);
   installGroupRoutes(app, db);
   installMessagingRoutes(app, db);
   installEventRoutes(app, db);

@@ -21,9 +21,11 @@ import { SymbolView } from "expo-symbols";
 import type { AppColors } from "../../constants/app-colors";
 import {
   INTEREST_CATEGORIES,
+  MIN_INTERESTS,
   recognizedInterests,
   type InterestCategory,
 } from "../../constants/interests";
+import { setGuestInterestDraft } from "../../lib/guest-interests";
 import { useAuth } from "../../context/auth-context";
 import { useAppTheme } from "../../context/theme-context";
 import { ApiError, apiRequest } from "../../lib/api";
@@ -114,6 +116,7 @@ export default function SearchScreen() {
   const selected =
     draft?.owner === uid ? draft.values : recognizedInterests(saved);
   const dirty = draft?.owner === uid && !sameSelection(selected, saved);
+  const tooFew = !!user && selected.length < MIN_INTERESTS;
   const busy = saving || loading;
   const previousCategories = saved.some(
     (value) => !recognizedInterests([value]).length,
@@ -150,7 +153,10 @@ export default function SearchScreen() {
 
   function choose(values: string[]) {
     if (busy) return;
-    setDraft({ owner: uid, values: recognizedInterests(values) });
+    const recognized = recognizedInterests(values);
+    // A guest's picks seed the first-run interests screen after sign-in.
+    if (!uid) setGuestInterestDraft(recognized);
+    setDraft({ owner: uid, values: recognized });
     setFeedback(null);
   }
 
@@ -163,7 +169,7 @@ export default function SearchScreen() {
   }
 
   async function save() {
-    if (!user || busy || !dirty || saveLock.current) return;
+    if (!user || busy || !dirty || tooFew || saveLock.current) return;
     const owner = user.id;
     const values = [...selected];
     saveLock.current = true;
@@ -216,7 +222,9 @@ export default function SearchScreen() {
             ? "Loading your interests…"
             : !user
               ? "Sign in to save interests to your profile."
-              : `${selected.length} ${selected.length === 1 ? "interest" : "interests"} selected${dirty ? " · Unsaved changes" : ""}`}
+              : tooFew
+                ? `Choose at least ${MIN_INTERESTS} interests · ${selected.length} selected`
+                : `${selected.length} ${selected.length === 1 ? "interest" : "interests"} selected${dirty ? " · Unsaved changes" : ""}`}
         </Text>
         {!user && !loading ? (
           <Pressable
@@ -232,12 +240,15 @@ export default function SearchScreen() {
         ) : (
           <Pressable
             accessibilityRole="button"
-            accessibilityState={{ disabled: busy || !dirty, busy: saving }}
-            disabled={busy || !dirty}
+            accessibilityState={{
+              disabled: busy || !dirty || tooFew,
+              busy: saving,
+            }}
+            disabled={busy || !dirty || tooFew}
             onPress={() => void save()}
             style={({ pressed }) => [
               styles.primaryButton,
-              (busy || !dirty) && styles.disabled,
+              (busy || !dirty || tooFew) && styles.disabled,
               pressed && styles.pressed,
             ]}
           >

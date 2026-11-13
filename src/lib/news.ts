@@ -1,3 +1,6 @@
+import type { User } from "firebase/auth";
+import { apiRequest } from "./api";
+
 export type NewsArticle = {
   id: string;
   title: string;
@@ -7,10 +10,26 @@ export type NewsArticle = {
   publishedAt: number;
   imageUrl: string | null;
   imageGroupKey?: string | null;
-  scope: "local" | "regional" | "ontario";
+  scope: "local" | "regional" | "ontario" | "interest";
   areaLabel: string;
   topics: string[];
+  interests?: string[];
   stale: boolean;
+};
+
+export type InterestTopic = {
+  topic: string;
+  label: string;
+  interests: string[];
+};
+
+export type InterestNewsResult = {
+  articles: NewsArticle[];
+  offset: number;
+  nextOffset: number | null;
+  topics: InterestTopic[];
+  generatedAt: string;
+  notice: string | null;
 };
 
 export type NewsResult = {
@@ -29,6 +48,19 @@ export type NewsResult = {
 const API_URL = (
   process.env.EXPO_PUBLIC_API_URL || "http://localhost:3000"
 ).replace(/\/$/, "");
+
+// News matched to the signed-in member's interests, ten stories per page.
+// The backend calls the news provider once per interest topic with a
+// half-second gap, so a first page can take several seconds.
+export function fetchInterestNews(account: User, offset = 0) {
+  return apiRequest<InterestNewsResult>(
+    account,
+    "GET",
+    undefined,
+    `/api/news/for-you${offset > 0 ? `?offset=${offset}` : ""}`,
+    { timeoutMs: 45000 },
+  );
+}
 
 class NewsResponseError extends Error {}
 
