@@ -81,6 +81,8 @@ export default function TabLayout() {
       initialRouteName="home"
       screenOptions={{
         headerShown: false,
+        // Slide-and-fade toward the tapped tab so the order reads clearly.
+        animation: "shift",
         tabBarHideOnKeyboard: true,
         tabBarActiveTintColor: colors.accent,
         tabBarInactiveTintColor: colors.muted,
