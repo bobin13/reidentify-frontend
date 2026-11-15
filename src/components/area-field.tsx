@@ -11,8 +11,8 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import type { AppColors } from "../constants/app-colors";
+import { gutter, radius, type } from "../constants/theme";
 import { useAppTheme } from "../context/theme-context";
 import {
   ONTARIO_CITIES,
@@ -22,6 +22,7 @@ import {
   resolveArea,
   type AreaSelection,
 } from "../lib/locations";
+import { ModalSafeArea } from "./modal-safe-area";
 
 type Props = {
   value: AreaSelection | null;
@@ -138,7 +139,7 @@ export function AreaField({ value, onChange, disabled = false, error }: Props) {
         presentationStyle="fullScreen"
         onRequestClose={() => (step === "district" ? changeCity() : close())}
       >
-        <SafeAreaView edges={["top", "bottom"]} style={styles.screen}>
+        <ModalSafeArea edges={["top", "bottom"]} style={styles.screen}>
           <KeyboardAvoidingView
             style={styles.flex}
             behavior={Platform.OS === "ios" ? "padding" : "height"}
@@ -322,7 +323,7 @@ export function AreaField({ value, onChange, disabled = false, error }: Props) {
               )}
             </View>
           </KeyboardAvoidingView>
-        </SafeAreaView>
+        </ModalSafeArea>
       </Modal>
     </View>
   );
@@ -332,127 +333,117 @@ function createStyles(colors: AppColors) {
   return StyleSheet.create({
     flex: { flex: 1 },
     field: { gap: 8 },
-    label: { color: colors.text, fontSize: 16, fontWeight: "600" },
+    label: { ...type.label, color: colors.text },
     trigger: {
-      minHeight: 76,
+      minHeight: 68,
       borderWidth: 1,
       borderColor: colors.border,
-      borderRadius: 14,
+      borderRadius: radius.md,
       backgroundColor: colors.surface,
       flexDirection: "row",
       alignItems: "center",
-      padding: 16,
+      paddingHorizontal: 16,
+      paddingVertical: 12,
       gap: 16,
     },
-    copy: { flex: 1, minWidth: 0, gap: 5 },
-    value: {
-      color: colors.text,
-      fontSize: 18,
-      lineHeight: 25,
-      fontWeight: "600",
-    },
+    copy: { flex: 1, minWidth: 0, gap: 3 },
+    value: { ...type.heading, color: colors.text },
     muted: { color: colors.muted },
-    hint: { color: colors.muted, fontSize: 15, lineHeight: 22 },
-    action: { color: colors.accent, fontSize: 17, fontWeight: "700" },
+    hint: { ...type.caption, fontSize: 14, lineHeight: 20, color: colors.muted },
+    action: { ...type.label, color: colors.accent, fontWeight: "700" },
     dim: { opacity: 0.55 },
-    errorBorder: { borderColor: "#DC7565" },
-    error: {
-      color: colors.background === "#101214" ? "#FFA895" : "#A33527",
-      fontSize: 16,
-      lineHeight: 23,
-    },
+    errorBorder: { borderColor: colors.danger },
+    error: { ...type.body, fontSize: 15, lineHeight: 22, color: colors.danger },
     screen: { flex: 1, backgroundColor: colors.background },
     panel: { flex: 1, width: "100%", maxWidth: 640, alignSelf: "center" },
     topRow: {
       flexDirection: "row",
       alignItems: "center",
       justifyContent: "space-between",
-      paddingHorizontal: 20,
+      paddingHorizontal: gutter,
       paddingTop: 8,
       gap: 12,
     },
-    title: { color: colors.text, fontSize: 21, fontWeight: "700" },
+    title: { ...type.heading, fontSize: 18, color: colors.text, fontWeight: "700" },
     textButton: {
-      minHeight: 48,
+      minHeight: 44,
       justifyContent: "center",
       paddingHorizontal: 8,
     },
-    intro: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 12, gap: 8 },
-    eyebrow: { color: colors.accent, fontSize: 14, fontWeight: "700" },
-    heading: {
-      color: colors.text,
-      fontSize: 27,
-      lineHeight: 34,
-      fontWeight: "700",
+    intro: {
+      paddingHorizontal: gutter,
+      paddingTop: 20,
+      paddingBottom: 12,
+      gap: 6,
     },
-    body: { color: colors.muted, fontSize: 17, lineHeight: 25 },
+    eyebrow: { ...type.eyebrow, color: colors.accent },
+    heading: { ...type.display, fontSize: 26, lineHeight: 32, color: colors.text },
+    body: { ...type.body, color: colors.muted },
     changeCity: {
-      minHeight: 48,
+      minHeight: 44,
       justifyContent: "center",
       alignSelf: "flex-start",
     },
     searchRow: {
       flexDirection: "row",
       alignItems: "center",
-      marginHorizontal: 20,
+      marginHorizontal: gutter,
       marginBottom: 12,
       borderWidth: 1,
       borderColor: colors.border,
       backgroundColor: colors.surface,
-      borderRadius: 14,
+      borderRadius: radius.md,
       paddingRight: 8,
     },
     search: {
       flex: 1,
       minWidth: 0,
-      minHeight: 58,
+      minHeight: 52,
       color: colors.text,
-      fontSize: 18,
-      paddingHorizontal: 14,
-      paddingVertical: 15,
+      fontSize: 16,
+      paddingHorizontal: 16,
+      paddingVertical: 13,
     },
-    list: { paddingHorizontal: 20, paddingBottom: 20 },
+    list: { paddingHorizontal: gutter, paddingBottom: 20 },
     option: {
-      minHeight: 68,
+      minHeight: 60,
       flexDirection: "row",
       alignItems: "center",
       gap: 12,
-      padding: 16,
+      paddingHorizontal: 16,
+      paddingVertical: 12,
       borderWidth: 1,
       borderColor: colors.border,
-      borderRadius: 14,
+      borderRadius: radius.md,
       backgroundColor: colors.surface,
-      marginBottom: 10,
+      marginBottom: 8,
     },
     selected: {
       borderColor: colors.accent,
-      backgroundColor: colors.background,
+      backgroundColor: colors.accentSoft,
     },
-    check: { color: colors.accent, fontSize: 24, fontWeight: "700" },
-    empty: {
-      color: colors.muted,
-      fontSize: 17,
-      lineHeight: 26,
-      paddingVertical: 24,
-    },
+    check: { color: colors.accent, fontSize: 20, fontWeight: "700" },
+    empty: { ...type.body, color: colors.muted, paddingVertical: 24 },
     footer: {
-      padding: 20,
+      padding: gutter,
       paddingTop: 14,
       gap: 12,
-      borderTopWidth: 1,
+      borderTopWidth: StyleSheet.hairlineWidth,
       borderTopColor: colors.border,
     },
     primary: {
-      minHeight: 58,
+      minHeight: 54,
       justifyContent: "center",
       alignItems: "center",
-      borderRadius: 14,
-      padding: 16,
+      borderRadius: radius.pill,
+      paddingHorizontal: 20,
+      paddingVertical: 14,
       backgroundColor: colors.accent,
     },
     primaryText: {
+      ...type.label,
+      fontSize: 16,
       color: colors.background,
-      fontSize: 18,
       fontWeight: "700",
       textAlign: "center",
     },

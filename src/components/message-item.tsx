@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Link } from "expo-router";
+import { router } from "expo-router";
 import {
   Pressable,
   StyleSheet,
@@ -8,6 +8,7 @@ import {
 } from "react-native";
 
 import type { AppColors } from "../constants/app-colors";
+import { card, radius, type } from "../constants/theme";
 import { useAppTheme } from "../context/theme-context";
 import type { Chat } from "../lib/messaging";
 import {
@@ -37,14 +38,13 @@ export function MessageItem({ conversation }: MessageItemProps) {
     .toUpperCase();
 
   return (
-    <Link
-      href={{
-        pathname: "/conversation/[id]",
-        params: { id: conversation.id },
-      }}
-      asChild
-    >
-      <Pressable
+    <Pressable
+        onPress={() =>
+          router.push({
+            pathname: "/conversation/[id]",
+            params: { id: conversation.id },
+          })
+        }
         accessibilityLabel={`Open conversation with ${conversation.name}. ${
           enabled
             ? hideSwearWords(conversation.preview)
@@ -64,7 +64,7 @@ export function MessageItem({ conversation }: MessageItemProps) {
 
         <View style={styles.details}>
           <View style={styles.nameLine}>
-            <Text style={styles.name}>
+            <Text numberOfLines={1} style={styles.name}>
               {conversation.name}
             </Text>
 
@@ -76,7 +76,10 @@ export function MessageItem({ conversation }: MessageItemProps) {
           <View style={styles.previewLine}>
             <ChatText
               numberOfLines={1}
-              style={styles.preview}
+              style={[
+                styles.preview,
+                conversation.unreadCount > 0 && styles.previewUnread,
+              ]}
             >
               {conversation.preview}
             </ChatText>
@@ -90,99 +93,69 @@ export function MessageItem({ conversation }: MessageItemProps) {
             )}
           </View>
         </View>
-      </Pressable>
-    </Link>
+    </Pressable>
   );
 }
 
 function createStyles(colors: AppColors) {
   return StyleSheet.create({
     row: {
+      ...card(colors),
       minHeight: 76,
       flexDirection: "row",
       alignItems: "center",
-      gap: 12,
-      marginVertical: 4,
-      paddingHorizontal: 12,
+      gap: 14,
+      paddingHorizontal: 14,
       paddingVertical: 12,
-      borderWidth: 1,
-      borderColor: colors.accent,
-      borderRadius: 12,
-      backgroundColor: colors.surface,
-      shadowColor: "#000",
-      shadowOffset: { width: 0, height: 2 },
-      shadowOpacity: 0.24,
-      shadowRadius: 4,
-      elevation: 4,
     },
-
-    pressed: {
-      opacity: 0.72,
-    },
-
+    pressed: { opacity: 0.8 },
     avatar: {
       width: 48,
       height: 48,
       borderRadius: 24,
       alignItems: "center",
       justifyContent: "center",
-      backgroundColor: colors.accent,
+      backgroundColor: colors.accentSoft,
     },
-
     initials: {
-      color: colors.background,
-      fontSize: 14,
+      color: colors.accent,
+      fontSize: 16,
       fontWeight: "700",
     },
-
-    details: {
-      flex: 1,
-      gap: 6,
-    },
-
+    details: { flex: 1, minWidth: 0, gap: 3 },
     nameLine: {
       flexDirection: "row",
       alignItems: "center",
       justifyContent: "space-between",
       gap: 12,
     },
-
-    name: {
-      color: colors.text,
-      fontSize: 15,
-      fontWeight: "700",
-    },
-
-    timestamp: {
-      color: colors.muted,
-      fontSize: 12,
-    },
-
+    name: { ...type.heading, flex: 1, color: colors.text },
+    timestamp: { ...type.caption, fontSize: 12, color: colors.muted },
     previewLine: {
       flexDirection: "row",
       alignItems: "center",
       gap: 12,
     },
-
     preview: {
+      ...type.caption,
       flex: 1,
+      fontSize: 14,
+      lineHeight: 20,
       color: colors.muted,
-      fontSize: 13,
     },
-
+    previewUnread: { color: colors.text, fontWeight: "600" },
     unreadBadge: {
-      minWidth: 20,
-      height: 20,
+      minWidth: 22,
+      height: 22,
       alignItems: "center",
       justifyContent: "center",
-      paddingHorizontal: 5,
-      borderRadius: 10,
+      paddingHorizontal: 6,
+      borderRadius: radius.pill,
       backgroundColor: colors.accent,
     },
-
     unreadCount: {
       color: colors.background,
-      fontSize: 11,
+      fontSize: 12,
       fontWeight: "700",
     },
   });

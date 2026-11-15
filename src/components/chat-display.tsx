@@ -336,7 +336,7 @@ export function ChatAvatar({
         width: 26,
         height: 26,
         borderRadius: 13,
-        backgroundColor: colors.accent,
+        backgroundColor: colors.accentSoft,
         alignItems: "center",
         justifyContent: "center",
         overflow: "hidden",
@@ -356,7 +356,7 @@ export function ChatAvatar({
       ) : (
         <Text
           style={{
-            color: colors.background,
+            color: colors.accent,
             fontSize: 11,
             fontWeight: "700",
           }}
@@ -390,35 +390,26 @@ export function ChatBubble({
   edited?: boolean;
 }) {
   const { colors } = useAppTheme();
-  const green = own && variant === "direct";
-  const ownGroup = own && variant === "group";
+  // Own messages are filled with the accent in both direct and group chats.
+  const green = own;
+  void variant;
 
   return (
     <View
       style={{
         alignSelf: own ? "flex-end" : "flex-start",
-        maxWidth: "96%",
-        marginTop: showSender ? 8 : 3,
-        paddingHorizontal: 10,
-        paddingTop: 6,
-        paddingBottom: 5,
-        borderWidth: 1.5,
-        borderColor: green
-          ? colors.background
-          : ownGroup
-            ? colors.accent
-            : colors.border,
-        borderRadius: 12,
-        shadowColor: "#000",
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.24,
-        shadowRadius: 4,
-        elevation: 4,
-        backgroundColor: green
-          ? colors.accent
-          : ownGroup
-            ? colors.background
-            : colors.surface,
+        maxWidth: "86%",
+        marginTop: showSender ? 10 : 3,
+        paddingHorizontal: 14,
+        paddingTop: 8,
+        paddingBottom: 7,
+        borderWidth: 1,
+        borderColor: green ? colors.accent : colors.border,
+        borderRadius: 20,
+        // The corner nearest the sender is tightened into a tail.
+        borderBottomRightRadius: own ? 6 : 20,
+        borderBottomLeftRadius: own ? 20 : 6,
+        backgroundColor: green ? colors.accent : colors.surface,
       }}
     >
       {showSender && (
@@ -463,8 +454,8 @@ export function ChatBubble({
             color: green
               ? colors.background
               : colors.text,
-            fontSize: 17,
-            lineHeight: 24,
+            fontSize: 16,
+            lineHeight: 22,
             maxWidth: "100%",
             flexShrink: 1,
           }}
@@ -481,8 +472,9 @@ export function ChatBubble({
             color: green
               ? colors.background
               : colors.muted,
-            fontSize: 12,
+            fontSize: 11,
             lineHeight: 16,
+            opacity: green ? 0.75 : 1,
             marginLeft: "auto",
             flexShrink: 0,
             textAlign: "right",

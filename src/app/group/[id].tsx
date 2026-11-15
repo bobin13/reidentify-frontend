@@ -25,10 +25,8 @@ import {
   TextInput,
   View,
 } from "react-native";
-import {
-  SafeAreaView,
-  useSafeAreaInsets,
-} from "react-native-safe-area-context";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { ModalSafeArea } from "../../components/modal-safe-area";
 
 import {
   ChatBubble,
@@ -42,6 +40,7 @@ import {
 import { GroupEvents } from "../../components/group-events";
 import { useAuth } from "../../context/auth-context";
 import type { AppColors } from "../../constants/app-colors";
+import { radius, shadow, type } from "../../constants/theme";
 import { auth } from "../../lib/firebase";
 import { ApiError } from "../../lib/api";
 import { startChat } from "../../lib/messaging";
@@ -809,11 +808,16 @@ export default function GroupScreen() {
                 }}
                 style={[
                   chat.tab,
-                  panel === value && s.selected,
+                  panel === value && chat.tabActive,
                 ]}
                 onPress={() => setPanel(value)}
               >
-                <Text style={chat.tabLabel}>
+                <Text
+                  style={[
+                    chat.tabLabel,
+                    panel === value && chat.tabLabelActive,
+                  ]}
+                >
                   {value === "chat"
                     ? "Chat"
                     : value === "members"
@@ -822,7 +826,12 @@ export default function GroupScreen() {
                 </Text>
 
                 {value === "members" && (
-                  <Text style={chat.memberCount}>
+                  <Text
+                    style={[
+                      chat.memberCount,
+                      panel === value && chat.tabLabelActive,
+                    ]}
+                  >
                     {group.memberCount}
                   </Text>
                 )}
@@ -1082,7 +1091,7 @@ export default function GroupScreen() {
           }
         }}
       >
-        <SafeAreaView
+        <ModalSafeArea
           style={s.root}
           edges={["top", "bottom"]}
         >
@@ -1421,7 +1430,7 @@ export default function GroupScreen() {
               </>
             )}
           </ScrollView>
-        </SafeAreaView>
+        </ModalSafeArea>
       </Modal>
     </KeyboardAvoidingView>
   );
@@ -1433,175 +1442,114 @@ function createChatStyles(colors: AppColors) {
       paddingHorizontal: 16,
       paddingTop: 4,
       paddingBottom: 8,
-      gap: 4,
+      gap: 2,
     },
-
     toolbar: {
       flexDirection: "row",
       alignItems: "center",
       gap: 8,
     },
-
     headerButton: {
-      minHeight: 48,
+      minHeight: 44,
       justifyContent: "center",
-      paddingHorizontal: 10,
-      borderRadius: 10,
+      paddingHorizontal: 8,
+      borderRadius: radius.sm,
     },
-
-    headerButtonText: {
-      color: colors.text,
-      fontSize: 16,
-      fontWeight: "600",
-    },
-
-    title: {
-      color: colors.text,
-      fontSize: 22,
-      lineHeight: 28,
-      fontWeight: "700",
-    },
-
+    headerButtonText: { ...type.label, color: colors.accent },
+    title: { ...type.title, color: colors.text },
+    // Segmented control matching the Search and Messages tabs.
     tabs: {
       flexDirection: "row",
-      gap: 8,
-      paddingHorizontal: 12,
-      paddingVertical: 6,
-      borderBottomWidth: 1,
-      borderBottomColor: colors.border,
+      gap: 4,
+      marginHorizontal: 16,
+      marginBottom: 8,
+      padding: 4,
+      borderRadius: radius.md + 2,
+      backgroundColor: colors.surfaceAlt,
     },
-
     tab: {
       flex: 1,
-      minHeight: 48,
+      minHeight: 42,
       paddingHorizontal: 6,
-      paddingVertical: 8,
       flexDirection: "row",
       flexWrap: "wrap",
-      gap: 4,
+      gap: 5,
       justifyContent: "center",
       alignItems: "center",
-      borderRadius: 12,
-      backgroundColor: colors.surface,
-      borderWidth: 1,
-      borderColor: colors.border,
+      borderRadius: radius.md - 2,
     },
-
-    tabLabel: {
-      color: colors.text,
-      fontSize: 16,
-      lineHeight: 22,
-      fontWeight: "600",
-    },
-
-    memberCount: {
-      color: colors.muted,
-      fontSize: 14,
-      lineHeight: 20,
-    },
-
+    tabActive: { backgroundColor: colors.accent, ...shadow(colors, "card") },
+    tabLabel: { ...type.label, color: colors.muted },
+    tabLabelActive: { color: colors.background, fontWeight: "700" },
+    memberCount: { ...type.caption, color: colors.muted },
     timeline: {
-      paddingHorizontal: 12,
+      paddingHorizontal: 14,
       paddingTop: 2,
-      paddingBottom: 10,
+      paddingBottom: 12,
       flexGrow: 1,
       justifyContent: "flex-end",
     },
-
     day: {
+      ...type.caption,
       color: colors.muted,
-      fontSize: 14,
-      lineHeight: 20,
       textAlign: "center",
-      marginVertical: 8,
+      marginVertical: 10,
     },
-
     messageRow: {
       flexDirection: "row",
       alignItems: "flex-end",
       gap: 8,
     },
-
-    messageRowOwn: {
-      flexDirection: "row-reverse",
-    },
-
+    messageRowOwn: { flexDirection: "row-reverse" },
     message: {
       maxWidth: "82%",
       flexShrink: 1,
       minWidth: 88,
-      paddingHorizontal: 12,
+      paddingHorizontal: 14,
       paddingVertical: 8,
       gap: 2,
       borderWidth: 1,
       borderColor: colors.border,
-      borderRadius: 14,
+      borderRadius: radius.lg,
       backgroundColor: colors.surface,
     },
-
-    sender: {
-      color: colors.accent,
-      fontSize: 14,
-      lineHeight: 20,
-      fontWeight: "600",
-    },
-
-    messageText: {
-      color: colors.text,
-      fontSize: 17,
-      lineHeight: 24,
-    },
-
-    time: {
-      color: colors.muted,
-      fontSize: 13,
-      lineHeight: 18,
-      textAlign: "right",
-    },
-
+    sender: { ...type.caption, color: colors.accent, fontWeight: "600" },
+    messageText: { ...type.body, color: colors.text },
+    time: { ...type.caption, fontSize: 12, color: colors.muted, textAlign: "right" },
     composer: {
       flexDirection: "row",
       alignItems: "flex-end",
       paddingHorizontal: 12,
-      paddingTop: 8,
+      paddingTop: 10,
       gap: 8,
-      borderTopWidth: 1,
+      borderTopWidth: StyleSheet.hairlineWidth,
       borderTopColor: colors.border,
       backgroundColor: colors.surface,
     },
-
     messageInput: {
       flex: 1,
       minWidth: 0,
-      minHeight: 48,
+      minHeight: 46,
       maxHeight: 120,
-      paddingHorizontal: 12,
-      paddingVertical: 10,
+      paddingHorizontal: 16,
+      paddingVertical: 11,
       borderWidth: 1,
       borderColor: colors.border,
-      borderRadius: 12,
-      backgroundColor: colors.background,
+      borderRadius: radius.xl,
+      backgroundColor: colors.surfaceAlt,
       color: colors.text,
-      fontSize: 17,
-      lineHeight: 24,
+      fontSize: 16,
+      lineHeight: 22,
     },
-
     send: {
-      minWidth: 72,
-      minHeight: 48,
+      minWidth: 68,
+      minHeight: 46,
       justifyContent: "center",
       alignItems: "center",
-      paddingHorizontal: 12,
-      paddingVertical: 10,
-      borderRadius: 12,
+      paddingHorizontal: 16,
+      borderRadius: radius.pill,
       backgroundColor: colors.accent,
     },
-
-    sendText: {
-      color: colors.background,
-      fontSize: 16,
-      lineHeight: 24,
-      fontWeight: "700",
-    },
+    sendText: { ...type.label, color: colors.background, fontWeight: "700" },
   });
 }

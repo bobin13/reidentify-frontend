@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Tabs } from "expo-router";
 import { SymbolView } from "expo-symbols";
-import { AppState, View } from "react-native";
+import { AppState, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "../../context/auth-context";
 import { useAppTheme } from "../../context/theme-context";
@@ -85,15 +85,19 @@ export default function TabLayout() {
         tabBarActiveTintColor: colors.accent,
         tabBarInactiveTintColor: colors.muted,
         tabBarStyle: {
-          height: 64 + insets.bottom,
+          height: 60 + insets.bottom,
           paddingTop: 8,
-          paddingBottom: 8 + insets.bottom,
+          paddingBottom: 6 + insets.bottom,
           backgroundColor: colors.surface,
+          borderTopWidth: StyleSheet.hairlineWidth,
           borderTopColor: colors.border,
+          elevation: 0,
         },
         tabBarLabelStyle: {
-          fontSize: 12,
+          fontSize: 11,
           fontWeight: "600",
+          letterSpacing: 0.1,
+          marginTop: 2,
         },
       }}
     >
@@ -181,7 +185,7 @@ export default function TabLayout() {
                     borderRadius: 5,
                     borderWidth: 2,
                     borderColor: colors.surface,
-                    backgroundColor: "#E53935",
+                    backgroundColor: colors.danger,
                   }}
                 />
               )}

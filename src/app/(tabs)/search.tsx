@@ -15,13 +15,12 @@ import {
   TextInput,
   View,
 } from "react-native";
-import {
-  SafeAreaView,
-  useSafeAreaInsets,
-} from "react-native-safe-area-context";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { ModalSafeArea } from "../../components/modal-safe-area";
 import { SymbolView } from "expo-symbols";
 
 import type { AppColors } from "../../constants/app-colors";
+import { card, gutter, radius, shadow, type } from "../../constants/theme";
 import {
   INTEREST_CATEGORIES,
   MIN_INTERESTS,
@@ -457,9 +456,11 @@ export default function SearchScreen() {
                     ]}
                   >
                     <View style={styles.iconBox}>
-                      <Text style={styles.categoryIcon} accessible={false}>
-                        {item.icon}
-                      </Text>
+                      <SymbolView
+                        name={item.symbol}
+                        size={24}
+                        tintColor={colors.accent}
+                      />
                     </View>
                     <View style={styles.cardCopy}>
                       <Text style={styles.cardTitle}>{item.title}</Text>
@@ -543,7 +544,7 @@ export default function SearchScreen() {
         animationType="slide"
         onRequestClose={() => setCategory(null)}
       >
-        <SafeAreaView
+        <ModalSafeArea
           edges={["top", "bottom"]}
           style={styles.container}
           testID="interest-picker"
@@ -557,7 +558,7 @@ export default function SearchScreen() {
               <Text style={styles.linkText}>‹ Back to categories</Text>
             </Pressable>
             <Text accessibilityRole="header" style={styles.pickerTitle}>
-              {category?.icon} {category?.title}
+              {category?.title}
             </Text>
             <Text style={styles.body}>
               Tap an activity to select it. Tap again to remove it.
@@ -596,7 +597,7 @@ export default function SearchScreen() {
             })}
           </ScrollView>
           {saveBar(insets.bottom)}
-        </SafeAreaView>
+        </ModalSafeArea>
       </Modal>
 
       {person && uid && (
@@ -958,7 +959,7 @@ function PublicPerson({
   }
   return (
     <Modal visible animationType="slide" onRequestClose={onClose}>
-      <SafeAreaView edges={["top", "bottom"]} style={styles.container}>
+      <ModalSafeArea edges={["top", "bottom"]} style={styles.container}>
         <View style={styles.pickerHeader}>
           <Pressable
             accessibilityRole="button"
@@ -1048,7 +1049,7 @@ function PublicPerson({
             </>
           )}
         </ScrollView>
-      </SafeAreaView>
+      </ModalSafeArea>
     </Modal>
   );
 }
@@ -1056,100 +1057,99 @@ function PublicPerson({
 function createStyles(colors: AppColors) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
-    top: { paddingHorizontal: 20, paddingTop: 18, paddingBottom: 14, gap: 8 },
-    title: { color: colors.text, fontSize: 28, fontWeight: "700" },
-    subtitle: { color: colors.muted, fontSize: 17, lineHeight: 25 },
-    tabs: { flexDirection: "row", gap: 8, marginTop: 12 },
+    top: {
+      paddingHorizontal: gutter,
+      paddingTop: 14,
+      paddingBottom: 12,
+      gap: 4,
+    },
+    title: { ...type.display, color: colors.text },
+    subtitle: { ...type.body, color: colors.muted },
+
+    // Segmented control
+    tabs: {
+      flexDirection: "row",
+      gap: 4,
+      marginTop: 14,
+      padding: 4,
+      borderRadius: radius.md + 2,
+      backgroundColor: colors.surfaceAlt,
+    },
     tab: {
       flex: 1,
-      minHeight: 54,
-      padding: 10,
+      minHeight: 44,
+      paddingHorizontal: 8,
       alignItems: "center",
       justifyContent: "center",
-      borderWidth: 1,
-      borderColor: colors.border,
-      borderRadius: 14,
-      backgroundColor: colors.surface,
+      borderRadius: radius.md - 2,
     },
-    activeTab: { backgroundColor: colors.accent, borderColor: colors.accent },
-    tabText: {
-      color: colors.text,
-      fontSize: 17,
-      fontWeight: "700",
-      textAlign: "center",
-    },
-    activeTabText: { color: colors.background },
+    activeTab: { backgroundColor: colors.accent, ...shadow(colors, "card") },
+    tabText: { ...type.label, color: colors.muted, textAlign: "center" },
+    activeTabText: { color: colors.background, fontWeight: "700" },
+
     scroll: { flex: 1 },
-    content: { padding: 20, paddingTop: 8, paddingBottom: 28, gap: 14 },
-    summary: {
-      padding: 18,
+    content: {
+      padding: gutter,
+      paddingTop: 8,
+      paddingBottom: 28,
       gap: 12,
-      backgroundColor: colors.surface,
-      borderRadius: 18,
-      borderWidth: 1,
-      borderColor: colors.border,
     },
-    sectionTitle: { color: colors.text, fontSize: 21, fontWeight: "700" },
-    body: { color: colors.muted, fontSize: 16, lineHeight: 24 },
+    summary: { ...card(colors), padding: 18, gap: 12 },
+    sectionTitle: { ...type.title, fontSize: 20, color: colors.text },
+    body: { ...type.body, color: colors.muted },
+
+    // Category and person rows
     category: {
+      ...card(colors),
       flexDirection: "row",
       alignItems: "center",
-      padding: 16,
+      padding: 14,
       gap: 14,
-      borderRadius: 18,
-      backgroundColor: colors.surface,
-      borderWidth: 1,
-      borderColor: colors.border,
     },
-    chosenCategory: { borderColor: colors.accent, borderWidth: 2 },
+    chosenCategory: {
+      borderColor: colors.accent,
+      backgroundColor: colors.accentSoft,
+    },
     iconBox: {
-      width: 52,
-      minHeight: 52,
-      borderRadius: 16,
-      backgroundColor: colors.background,
+      width: 48,
+      height: 48,
+      borderRadius: radius.md,
+      backgroundColor: colors.accentSoft,
       justifyContent: "center",
       alignItems: "center",
     },
-    categoryIcon: { fontSize: 28 },
-    cardCopy: { flex: 1, minWidth: 0, gap: 5 },
-    cardTitle: {
-      color: colors.text,
-      fontSize: 19,
-      lineHeight: 27,
-      fontWeight: "700",
-    },
+    cardCopy: { flex: 1, minWidth: 0, gap: 2 },
+    cardTitle: { ...type.heading, color: colors.text },
     categoryCount: {
+      ...type.caption,
       color: colors.accent,
-      fontSize: 15,
-      lineHeight: 22,
       fontWeight: "600",
+      marginTop: 2,
     },
-    chevron: { color: colors.muted, fontSize: 28 },
+    chevron: { color: colors.muted, fontSize: 24, lineHeight: 26 },
+
+    // Chips
     tags: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
     tag: {
-      minHeight: 48,
+      minHeight: 40,
       maxWidth: "100%",
-      paddingHorizontal: 12,
-      paddingVertical: 12,
-      borderRadius: 12,
-      borderWidth: 1,
-      borderColor: colors.accent,
+      justifyContent: "center",
+      paddingHorizontal: 14,
+      paddingVertical: 8,
+      borderRadius: radius.pill,
+      backgroundColor: colors.accentSoft,
     },
-    tagText: { color: colors.text, fontSize: 16, lineHeight: 23 },
-    textButton: { minHeight: 48, justifyContent: "center", paddingVertical: 8 },
-    linkText: {
-      color: colors.accent,
-      fontSize: 17,
-      lineHeight: 25,
-      fontWeight: "700",
-    },
+    tagText: { ...type.label, color: colors.text, fontWeight: "500" },
+    textButton: { minHeight: 44, justifyContent: "center", paddingVertical: 6 },
+    linkText: { ...type.label, color: colors.accent, fontWeight: "700" },
+
     // Room at the end of a list so the floating save control never covers
     // the last rows.
     floatSpace: { paddingBottom: 160 },
     saveFloat: {
       position: "absolute",
-      right: 20,
-      left: 20,
+      right: gutter,
+      left: gutter,
       alignItems: "flex-end",
       gap: 8,
     },
@@ -1158,41 +1158,37 @@ function createStyles(colors: AppColors) {
       gap: 4,
       paddingVertical: 8,
       paddingHorizontal: 14,
-      borderRadius: 14,
+      borderRadius: radius.md,
       borderWidth: 1,
       borderColor: colors.border,
       backgroundColor: colors.surface,
+      ...shadow(colors, "raised"),
     },
-    saveHint: {
-      color: colors.muted,
+    saveHint: { ...type.caption, color: colors.muted, textAlign: "right" },
+    feedback: {
+      ...type.caption,
       fontSize: 14,
-      lineHeight: 20,
+      color: colors.text,
+      fontWeight: "600",
       textAlign: "right",
     },
     saveButton: {
-      minHeight: 56,
-      minWidth: 112,
-      borderRadius: 28,
-      paddingVertical: 14,
-      paddingHorizontal: 24,
+      minHeight: 52,
+      borderRadius: radius.pill,
+      paddingVertical: 12,
+      paddingHorizontal: 22,
       flexDirection: "row",
       gap: 10,
       alignItems: "center",
       justifyContent: "center",
       backgroundColor: colors.accent,
       // A deep, soft shadow lifts the button off the list behind it.
-      shadowColor: "#000",
-      shadowOffset: { width: 0, height: 8 },
-      shadowOpacity: 0.3,
-      shadowRadius: 14,
-      elevation: 10,
+      ...shadow(colors, "floating"),
     },
     saveIconButton: {
-      width: 64,
-      height: 64,
-      minWidth: 64,
-      borderRadius: 32,
-      padding: 0,
+      width: 60,
+      height: 60,
+      borderRadius: 30,
       paddingVertical: 0,
       paddingHorizontal: 0,
     },
@@ -1209,7 +1205,7 @@ function createStyles(colors: AppColors) {
       right: 0,
       bottom: 0,
       left: 0,
-      borderRadius: 32,
+      borderRadius: 30,
       backgroundColor: colors.background,
       opacity: 0.5,
     },
@@ -1221,16 +1217,18 @@ function createStyles(colors: AppColors) {
       elevation: 4,
     },
     saveButtonText: {
+      ...type.label,
+      fontSize: 16,
       color: colors.background,
-      fontSize: 18,
-      lineHeight: 26,
       fontWeight: "700",
       textAlign: "center",
     },
+
     primaryButton: {
-      minHeight: 56,
-      borderRadius: 14,
-      padding: 14,
+      minHeight: 52,
+      borderRadius: radius.pill,
+      paddingHorizontal: 20,
+      paddingVertical: 12,
       flexDirection: "row",
       gap: 10,
       alignItems: "center",
@@ -1238,53 +1236,46 @@ function createStyles(colors: AppColors) {
       backgroundColor: colors.accent,
     },
     primaryText: {
+      ...type.label,
+      fontSize: 16,
       color: colors.background,
-      fontSize: 18,
-      lineHeight: 26,
       fontWeight: "700",
       textAlign: "center",
     },
-    feedback: {
-      color: colors.text,
-      fontSize: 15,
-      lineHeight: 21,
-      fontWeight: "600",
-      textAlign: "right",
-    },
     disabled: { opacity: 0.55 },
-    pressed: { opacity: 0.75 },
-    pickerHeader: { padding: 20, paddingTop: 8, gap: 12 },
-    pickerTitle: {
-      color: colors.text,
-      fontSize: 26,
-      lineHeight: 35,
-      fontWeight: "700",
-    },
+    pressed: { opacity: 0.8 },
+
+    // Activity picker and person sheets
+    pickerHeader: { paddingHorizontal: gutter, paddingTop: 4, gap: 6 },
+    pickerTitle: { ...type.display, fontSize: 26, color: colors.text },
     activityRow: {
-      minHeight: 68,
-      padding: 16,
+      ...card(colors),
+      minHeight: 60,
+      paddingHorizontal: 16,
+      paddingVertical: 12,
       flexDirection: "row",
       alignItems: "center",
-      gap: 16,
-      backgroundColor: colors.surface,
-      borderRadius: 16,
-      borderWidth: 1,
-      borderColor: colors.border,
+      gap: 14,
     },
     checkbox: {
-      width: 30,
-      height: 30,
-      borderRadius: 7,
+      width: 26,
+      height: 26,
+      borderRadius: 8,
       borderWidth: 2,
       borderColor: colors.muted,
       justifyContent: "center",
       alignItems: "center",
     },
     checkedBox: { backgroundColor: colors.accent, borderColor: colors.accent },
-    checkmark: { color: colors.background, fontSize: 22, fontWeight: "700" },
-    activityText: { flex: 1, color: colors.text, fontSize: 19, lineHeight: 28 },
+    checkmark: {
+      color: colors.background,
+      fontSize: 16,
+      lineHeight: 20,
+      fontWeight: "800",
+    },
+    activityText: { ...type.body, flex: 1, fontSize: 17, color: colors.text },
     searchBar: {
-      minHeight: 58,
+      minHeight: 52,
       flexDirection: "row",
       alignItems: "center",
       gap: 10,
@@ -1292,16 +1283,16 @@ function createStyles(colors: AppColors) {
       backgroundColor: colors.surface,
       borderWidth: 1,
       borderColor: colors.border,
-      borderRadius: 14,
+      borderRadius: radius.md,
     },
     searchInput: {
       flex: 1,
       minWidth: 0,
-      paddingVertical: 14,
+      paddingVertical: 12,
       color: colors.text,
-      fontSize: 17,
+      fontSize: 16,
     },
-    avatarText: { color: colors.accent, fontSize: 18, fontWeight: "700" },
+    avatarText: { color: colors.accent, fontSize: 17, fontWeight: "700" },
     peopleHeading: { flexDirection: "row", alignItems: "center", gap: 12 },
     profilePhoto: { width: 104, height: 104, borderRadius: 52 },
     profileInitials: {
@@ -1310,7 +1301,7 @@ function createStyles(colors: AppColors) {
       borderRadius: 52,
       alignItems: "center",
       justifyContent: "center",
-      backgroundColor: colors.surface,
+      backgroundColor: colors.accentSoft,
     },
   });
 }

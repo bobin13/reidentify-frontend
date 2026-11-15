@@ -30,6 +30,7 @@ import {
   useChatPhotos,
 } from "../../components/chat-display";
 import type { AppColors } from "../../constants/app-colors";
+import { radius, type } from "../../constants/theme";
 import { useAuth } from "../../context/auth-context";
 import { useAppTheme } from "../../context/theme-context";
 import { auth } from "../../lib/firebase";
@@ -383,7 +384,7 @@ export default function ConversationScreen() {
           style={styles.back}
           onPress={goBack}
         >
-          <Text style={styles.body}>← Back</Text>
+          <Text style={styles.backText}>‹ Back</Text>
         </Pressable>
 
         <View
@@ -561,90 +562,72 @@ export default function ConversationScreen() {
 
 function createStyles(colors: AppColors) {
   return StyleSheet.create({
-    container: {
-      flex: 1,
-      backgroundColor: colors.background,
-    },
+    container: { flex: 1, backgroundColor: colors.background },
     center: {
       flex: 1,
       padding: 24,
-      gap: 20,
+      gap: 16,
       justifyContent: "center",
       alignItems: "center",
       backgroundColor: colors.background,
     },
     header: {
       flexDirection: "row",
-      gap: 12,
+      gap: 8,
       alignItems: "center",
-      padding: 16,
-      borderBottomWidth: 1,
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      borderBottomWidth: StyleSheet.hairlineWidth,
       borderBottomColor: colors.border,
     },
     back: {
-      minHeight: 48,
+      minHeight: 44,
       justifyContent: "center",
       paddingHorizontal: 8,
     },
-    title: {
-      color: colors.text,
-      fontSize: 20,
-      fontWeight: "700",
-    },
-    body: {
-      color: colors.text,
-      fontSize: 17,
-      lineHeight: 25,
-    },
-    muted: {
-      color: colors.muted,
-      fontSize: 13,
-      lineHeight: 19,
-    },
+    backText: { ...type.label, color: colors.accent },
+    title: { ...type.heading, fontSize: 18, color: colors.text, fontWeight: "700" },
+    body: { ...type.body, color: colors.text },
+    muted: { ...type.caption, color: colors.muted },
     messages: {
       flexGrow: 1,
       justifyContent: "flex-end",
       gap: 0,
-      padding: 12,
+      padding: 14,
     },
-    error: {
-      color: colors.text,
-      fontSize: 15,
-      padding: 12,
-    },
+    error: { ...type.body, fontSize: 15, color: colors.text, padding: 12 },
     composer: {
       flexDirection: "row",
       alignItems: "flex-end",
-      gap: 10,
+      gap: 8,
       padding: 12,
-      borderTopWidth: 1,
+      borderTopWidth: StyleSheet.hairlineWidth,
       borderTopColor: colors.border,
+      backgroundColor: colors.surface,
     },
     input: {
       flex: 1,
-      minHeight: 50,
+      minHeight: 46,
       maxHeight: 140,
       color: colors.text,
-      fontSize: 17,
-      padding: 12,
+      fontSize: 16,
+      lineHeight: 22,
+      paddingHorizontal: 16,
+      paddingVertical: 11,
       borderWidth: 1,
       borderColor: colors.border,
-      borderRadius: 12,
-      backgroundColor: colors.surface,
+      borderRadius: radius.xl,
+      backgroundColor: colors.surfaceAlt,
     },
     send: {
-      minHeight: 50,
-      minWidth: 70,
+      minHeight: 46,
+      minWidth: 68,
       paddingHorizontal: 16,
-      borderRadius: 12,
+      borderRadius: radius.pill,
       justifyContent: "center",
       alignItems: "center",
       backgroundColor: colors.accent,
     },
-    sendText: {
-      color: colors.background,
-      fontWeight: "700",
-      fontSize: 16,
-    },
+    sendText: { ...type.label, color: colors.background, fontWeight: "700" },
   });
 }

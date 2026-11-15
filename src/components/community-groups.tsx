@@ -10,7 +10,7 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { ModalSafeArea } from "./modal-safe-area";
 import { useAuth } from "../context/auth-context";
 import { INTEREST_CATEGORIES } from "../constants/interests";
 import { resolveArea, selectionForProfile } from "../lib/locations";
@@ -226,7 +226,7 @@ function BlockedContacts({
   }
   return (
     <Modal visible animationType="slide" onRequestClose={onClose}>
-      <SafeAreaView style={s.root} edges={["top", "bottom"]}>
+      <ModalSafeArea style={s.root} edges={["top", "bottom"]}>
         <ScrollView contentContainerStyle={s.content}>
           <GroupButton
             label="Back to group conversations"
@@ -260,7 +260,7 @@ function BlockedContacts({
             <Text style={s.body}>No blocked contacts.</Text>
           )}
         </ScrollView>
-      </SafeAreaView>
+      </ModalSafeArea>
     </Modal>
   );
 }
@@ -527,7 +527,7 @@ function CreateGroup({
         if (!busy) onClose();
       }}
     >
-      <SafeAreaView style={s.root} edges={["top", "bottom"]}>
+      <ModalSafeArea style={s.root} edges={["top", "bottom"]}>
         <ScrollView
           contentContainerStyle={s.content}
           keyboardShouldPersistTaps="handled"
@@ -657,7 +657,7 @@ function CreateGroup({
             onPress={() => void create()}
           />
         </View>
-      </SafeAreaView>
+      </ModalSafeArea>
     </Modal>
   );
 }

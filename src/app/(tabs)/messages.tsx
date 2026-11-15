@@ -16,6 +16,7 @@ import { useGroupStyles } from "../../components/group-ui";
 
 import { MessageItem } from "../../components/message-item";
 import type { AppColors } from "../../constants/app-colors";
+import { card, gutter, radius, type } from "../../constants/theme";
 import { useAuth } from "../../context/auth-context";
 import { useAppTheme } from "../../context/theme-context";
 import { auth } from "../../lib/firebase";
@@ -50,9 +51,9 @@ export default function MessagesScreen() {
             accessibilityRole="button"
             accessibilityState={{ selected: section === value }}
             onPress={() => setSection(value)}
-            style={[s.tab, section === value && s.selected]}
+            style={[s.tab, section === value && s.tabActive]}
           >
-            <Text style={s.label}>
+            <Text style={[s.tabText, section === value && s.tabTextActive]}>
               {value === "direct" ? "Direct chats" : "Groups"}
             </Text>
           </Pressable>
@@ -279,11 +280,18 @@ function DirectMessagesScreen() {
               accessibilityState={{ selected: unreadOnly === value }}
               style={[
                 styles.filter,
-                unreadOnly === value && { borderColor: colors.accent },
+                unreadOnly === value && styles.filterActive,
               ]}
               onPress={() => setUnreadOnly(value)}
             >
-              <Text style={styles.body}>{value ? "Unread" : "All"}</Text>
+              <Text
+                style={[
+                  styles.filterText,
+                  unreadOnly === value && styles.filterTextActive,
+                ]}
+              >
+                {value ? "Unread" : "All"}
+              </Text>
             </Pressable>
           ))}
         </View>
@@ -316,7 +324,7 @@ function DirectMessagesScreen() {
               {opening === person.id ? (
                 <ActivityIndicator color={colors.accent} />
               ) : (
-                <Text style={styles.body}>Chat →</Text>
+                <Text style={styles.link}>Chat</Text>
               )}
             </Pressable>
           ))
@@ -350,13 +358,13 @@ function DirectMessagesScreen() {
 function createStyles(colors: AppColors) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
-    content: { padding: 20, paddingBottom: 32, gap: 16 },
+    content: { padding: gutter, paddingTop: 14, paddingBottom: 32, gap: 12 },
     center: {
       flex: 1,
       justifyContent: "center",
       alignItems: "center",
       padding: 24,
-      gap: 20,
+      gap: 16,
       backgroundColor: colors.background,
     },
     heading: {
@@ -365,57 +373,63 @@ function createStyles(colors: AppColors) {
       justifyContent: "space-between",
       gap: 12,
     },
-    title: {
-      color: colors.text,
-      fontSize: 26,
-      fontWeight: "700",
-      flexShrink: 1,
+    title: { ...type.display, color: colors.text, flexShrink: 1 },
+    subtitle: {
+      ...type.body,
+      fontSize: 15,
+      lineHeight: 22,
+      color: colors.muted,
     },
-    subtitle: { color: colors.muted, fontSize: 16, lineHeight: 23 },
-    body: { color: colors.text, fontSize: 16, lineHeight: 23 },
-    name: { color: colors.text, fontSize: 18, fontWeight: "600" },
+    body: { ...type.body, color: colors.text },
+    link: { ...type.label, color: colors.accent, fontWeight: "700" },
+    name: { ...type.heading, color: colors.text },
     input: {
-      minHeight: 54,
-      fontSize: 17,
+      minHeight: 50,
+      fontSize: 16,
       color: colors.text,
       backgroundColor: colors.surface,
       borderColor: colors.border,
       borderWidth: 1,
-      borderRadius: 14,
-      paddingHorizontal: 15,
+      borderRadius: radius.md,
+      paddingHorizontal: 16,
       paddingVertical: 12,
     },
     button: {
-      minHeight: 48,
+      minHeight: 42,
       justifyContent: "center",
-      paddingHorizontal: 16,
-      borderRadius: 12,
+      paddingHorizontal: 18,
+      borderRadius: radius.pill,
       backgroundColor: colors.accent,
     },
     buttonText: {
+      ...type.label,
       color: colors.background,
-      fontSize: 16,
       fontWeight: "700",
     },
-    filters: { flexDirection: "row", gap: 12 },
+    filters: { flexDirection: "row", gap: 8 },
     filter: {
-      minHeight: 48,
+      minHeight: 40,
       justifyContent: "center",
-      paddingHorizontal: 20,
-      borderRadius: 24,
-      borderWidth: 1,
-      borderColor: colors.border,
-    },
-    person: {
-      flexDirection: "row",
-      gap: 12,
-      alignItems: "center",
-      minHeight: 80,
+      paddingHorizontal: 18,
+      borderRadius: radius.pill,
       borderWidth: 1,
       borderColor: colors.border,
       backgroundColor: colors.surface,
-      borderRadius: 12,
-      padding: 16,
+    },
+    filterActive: {
+      borderColor: colors.accent,
+      backgroundColor: colors.accent,
+    },
+    filterText: { ...type.label, fontSize: 14, color: colors.text },
+    filterTextActive: { color: colors.background, fontWeight: "700" },
+    person: {
+      ...card(colors),
+      flexDirection: "row",
+      gap: 12,
+      alignItems: "center",
+      minHeight: 72,
+      paddingHorizontal: 16,
+      paddingVertical: 12,
     },
   });
 }

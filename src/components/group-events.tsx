@@ -14,7 +14,7 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { ModalSafeArea } from "./modal-safe-area";
 type Coordinates = { latitude: number; longitude: number };
 type VenueSuggestion = {
   id: string;
@@ -391,7 +391,7 @@ function EventForm({
         if (!saving) onClose();
       }}
     >
-      <SafeAreaView style={s.root} edges={["top", "bottom"]}>
+      <ModalSafeArea style={s.root} edges={["top", "bottom"]}>
         {choice ? (
           <>
             <View style={s.content}>
@@ -624,7 +624,7 @@ function EventForm({
             </View>
           </>
         )}
-      </SafeAreaView>
+      </ModalSafeArea>
     </Modal>
   );
 }

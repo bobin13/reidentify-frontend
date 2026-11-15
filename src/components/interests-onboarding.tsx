@@ -7,9 +7,11 @@ import {
   Text,
   View,
 } from "react-native";
+import { SymbolView } from "expo-symbols";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import type { AppColors } from "../constants/app-colors";
+import { card, gutter, radius, type } from "../constants/theme";
 import {
   INTEREST_CATEGORIES,
   MIN_INTERESTS,
@@ -148,9 +150,13 @@ export function InterestsOnboarding({ user }: { user: AppUser }) {
                   pressed && styles.pressed,
                 ]}
               >
-                <Text style={styles.categoryIcon} accessible={false}>
-                  {category.icon}
-                </Text>
+                <View style={styles.categoryIcon}>
+                  <SymbolView
+                    name={category.symbol}
+                    size={22}
+                    tintColor={colors.accent}
+                  />
+                </View>
                 <View style={styles.categoryCopy}>
                   <Text style={styles.categoryTitle}>{category.title}</Text>
                   <Text style={styles.categoryMeta}>
@@ -239,19 +245,10 @@ function createStyles(colors: AppColors) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
     scroll: { flex: 1 },
-    content: { padding: 20, paddingBottom: 24, gap: 12 },
-    title: {
-      color: colors.text,
-      fontSize: 28,
-      fontWeight: "700",
-      letterSpacing: -0.3,
-    },
-    subtitle: {
-      color: colors.text,
-      fontSize: 18,
-      fontWeight: "600",
-    },
-    body: { color: colors.muted, fontSize: 15, lineHeight: 22 },
+    content: { padding: gutter, paddingBottom: 24, gap: 12 },
+    title: { ...type.display, color: colors.text },
+    subtitle: { ...type.heading, fontSize: 18, color: colors.text },
+    body: { ...type.body, fontSize: 15, lineHeight: 22, color: colors.muted },
     selectedWrap: {
       flexDirection: "row",
       flexWrap: "wrap",
@@ -260,37 +257,38 @@ function createStyles(colors: AppColors) {
     },
     selectedChip: {
       backgroundColor: colors.accent,
-      borderRadius: 999,
-      paddingHorizontal: 12,
-      paddingVertical: 7,
+      borderRadius: radius.pill,
+      paddingHorizontal: 14,
+      paddingVertical: 8,
     },
     selectedChipText: {
-      color: colors.background,
+      ...type.label,
       fontSize: 14,
-      fontWeight: "600",
+      color: colors.background,
     },
-    category: {
-      backgroundColor: colors.surface,
-      borderColor: colors.border,
-      borderRadius: 14,
-      borderWidth: 1,
-      overflow: "hidden",
-    },
+    category: { ...card(colors), overflow: "hidden" },
     categoryHeader: {
       alignItems: "center",
       flexDirection: "row",
       gap: 12,
-      minHeight: 64,
+      minHeight: 68,
       padding: 14,
     },
-    categoryIcon: { fontSize: 24 },
+    categoryIcon: {
+      width: 44,
+      height: 44,
+      borderRadius: radius.md,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: colors.accentSoft,
+    },
     categoryCopy: { flex: 1, gap: 2 },
-    categoryTitle: { color: colors.text, fontSize: 16, fontWeight: "600" },
-    categoryMeta: { color: colors.muted, fontSize: 13 },
+    categoryTitle: { ...type.heading, color: colors.text },
+    categoryMeta: { ...type.caption, color: colors.muted },
     chevron: { color: colors.muted, fontSize: 18 },
     chipWrap: {
       borderTopColor: colors.border,
-      borderTopWidth: 1,
+      borderTopWidth: StyleSheet.hairlineWidth,
       flexDirection: "row",
       flexWrap: "wrap",
       gap: 8,
@@ -298,8 +296,9 @@ function createStyles(colors: AppColors) {
     },
     chip: {
       borderColor: colors.border,
-      borderRadius: 999,
+      borderRadius: radius.pill,
       borderWidth: 1,
+      backgroundColor: colors.surfaceAlt,
       minHeight: 40,
       justifyContent: "center",
       paddingHorizontal: 14,
@@ -309,33 +308,34 @@ function createStyles(colors: AppColors) {
       backgroundColor: colors.accent,
       borderColor: colors.accent,
     },
-    chipText: { color: colors.text, fontSize: 15 },
-    chipTextChecked: { color: colors.background, fontWeight: "600" },
+    chipText: { ...type.label, fontWeight: "500", color: colors.text },
+    chipTextChecked: { color: colors.background, fontWeight: "700" },
     footer: {
       backgroundColor: colors.surface,
       borderTopColor: colors.border,
-      borderTopWidth: 1,
+      borderTopWidth: StyleSheet.hairlineWidth,
       gap: 8,
       padding: 16,
     },
-    error: { color: "#E53935", fontSize: 14 },
-    progress: { color: colors.muted, fontSize: 14 },
+    error: { ...type.caption, fontSize: 14, color: colors.danger },
+    progress: { ...type.caption, fontSize: 14, color: colors.muted },
     button: {
       alignItems: "center",
       backgroundColor: colors.accent,
-      borderRadius: 12,
+      borderRadius: radius.pill,
       flexDirection: "row",
       gap: 8,
       justifyContent: "center",
       minHeight: 52,
-      paddingHorizontal: 16,
+      paddingHorizontal: 20,
     },
     buttonDisabled: { opacity: 0.45 },
     buttonText: {
+      ...type.label,
+      fontSize: 16,
       color: colors.background,
-      fontSize: 17,
       fontWeight: "700",
     },
-    pressed: { opacity: 0.75 },
+    pressed: { opacity: 0.8 },
   });
 }

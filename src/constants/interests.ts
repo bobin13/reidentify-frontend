@@ -3,6 +3,7 @@ export const INTEREST_CATEGORIES = [
     id: "outdoors",
     title: "Outdoors & exercise",
     icon: "🚶",
+    symbol: { ios: "figure.walk", android: "directions_walk", web: "directions_walk" },
     description: "Keep moving and enjoy the outdoors",
     activities: [
       "Walking",
@@ -31,6 +32,7 @@ export const INTEREST_CATEGORIES = [
     id: "games",
     title: "Games & social",
     icon: "♟️",
+    symbol: { ios: "puzzlepiece.fill", android: "extension", web: "extension" },
     description: "Enjoy a game and good company",
     activities: [
       "Cards",
@@ -51,6 +53,7 @@ export const INTEREST_CATEGORIES = [
     id: "arts",
     title: "Arts & crafts",
     icon: "🎨",
+    symbol: { ios: "paintpalette.fill", android: "palette", web: "palette" },
     description: "Create, make and share ideas",
     activities: [
       "Painting/drawing",
@@ -70,6 +73,7 @@ export const INTEREST_CATEGORIES = [
     id: "music",
     title: "Music & entertainment",
     icon: "🎵",
+    symbol: { ios: "music.note", android: "music_note", web: "music_note" },
     description: "Share music, performances and stories",
     activities: [
       "Singing",
@@ -89,6 +93,7 @@ export const INTEREST_CATEGORIES = [
     id: "food",
     title: "Food & social outings",
     icon: "☕",
+    symbol: { ios: "cup.and.saucer.fill", android: "local_cafe", web: "local_cafe" },
     description: "Meet over a meal or a cup of tea",
     activities: [
       "Coffee/tea",
@@ -106,6 +111,7 @@ export const INTEREST_CATEGORIES = [
     id: "learning",
     title: "Learning & hobbies",
     icon: "📚",
+    symbol: { ios: "book.fill", android: "menu_book", web: "menu_book" },
     description: "Explore something that interests you",
     activities: [
       "Reading",
@@ -127,6 +133,7 @@ export const INTEREST_CATEGORIES = [
     id: "community",
     title: "Community & helping others",
     icon: "🤝",
+    symbol: { ios: "hand.raised.fill", android: "volunteer_activism", web: "volunteer_activism" },
     description: "Help others and get involved locally",
     activities: [
       "Volunteering",
@@ -143,6 +150,7 @@ export const INTEREST_CATEGORIES = [
     id: "culture",
     title: "Culture & personal interests",
     icon: "🌍",
+    symbol: { ios: "globe.americas.fill", android: "public", web: "public" },
     description: "Connect through culture and conversation",
     activities: [
       "Religious/spiritual activities",

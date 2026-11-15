@@ -23,6 +23,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import type { AppColors } from "../../constants/app-colors";
+import { card, gutter, radius, shadow, type } from "../../constants/theme";
 import { useAppTheme } from "../../context/theme-context";
 import { useAuth } from "../../context/auth-context";
 import {
@@ -123,7 +124,7 @@ function NewsPhoto({
 }
 
 export default function HomeScreen() {
-  const { colors, theme } = useAppTheme();
+  const { colors } = useAppTheme();
   const { user, loading: authLoading } = useAuth();
   const insets = useSafeAreaInsets();
 
@@ -141,9 +142,6 @@ export default function HomeScreen() {
 
   const title = `${cityName || "Ontario"} news`;
 
-  const newsCaption = cityName
-    ? `${cityName} news and the surrounding area`
-    : "Ontario news";
 
   const [state, setState] = useState<NewsState>({
     key: scopeKey,
@@ -249,8 +247,8 @@ export default function HomeScreen() {
   );
 
   const styles = useMemo(
-    () => createStyles(colors, theme === "dark"),
-    [colors, theme],
+    () => createStyles(colors),
+    [colors],
   );
 
   const current =
@@ -594,7 +592,7 @@ export default function HomeScreen() {
                 android: "notifications",
                 web: "notifications",
               }}
-              size={25}
+              size={21}
               tintColor={colors.text}
             />
           </Pressable>
@@ -622,7 +620,7 @@ export default function HomeScreen() {
                 styles.newsHeadingTitle,
               ]}
             >
-              {newsCaption}
+              {title}
             </Text>
 
             <Pressable
@@ -636,6 +634,15 @@ export default function HomeScreen() {
               style={styles.refreshButton}
               hitSlop={6}
             >
+              <SymbolView
+                name={{
+                  ios: "arrow.clockwise",
+                  android: "refresh",
+                  web: "refresh",
+                }}
+                size={15}
+                tintColor={colors.accent}
+              />
               <Text style={styles.refreshText}>
                 {refreshing
                   ? "Refreshing…"
@@ -916,7 +923,7 @@ export default function HomeScreen() {
               android: "favorite_border",
               web: "favorite_border",
             }}
-            size={27}
+            size={24}
             tintColor={colors.accent}
           />
 
@@ -984,169 +991,8 @@ export default function HomeScreen() {
   );
 }
 
-function createStyles(
-  colors: AppColors,
-  isDark: boolean,
-) {
+function createStyles(colors: AppColors) {
   return StyleSheet.create({
-    moreNewsButton: {
-      minHeight: 48,
-      alignItems: "center",
-      justifyContent: "center",
-      padding: 12,
-      borderRadius: 12,
-      borderWidth: 1,
-      borderColor: colors.border,
-    },
-    newsMeta: {
-      flexDirection: "row",
-      flexWrap: "wrap",
-      justifyContent: "space-between",
-      alignItems: "center",
-      gap: 8,
-    },
-    newsArea: {
-      color: colors.muted,
-      fontSize: 12,
-      lineHeight: 18,
-    },
-    newsSection: {
-      gap: 4,
-      marginBottom: 28,
-    },
-newsHeading: {
-  flexDirection: "row",
-  alignItems: "flex-end",
-  justifyContent: "space-between",
-  gap: 8,
-},
-newsHeadingTitle: {
-  flex: 1,
-  minWidth: 0,
-  fontSize: 14,
-  lineHeight: 20,
-  paddingBottom: 0,
-  includeFontPadding: false,
-},
-    refreshButton: {
-      minHeight: 32,
-      justifyContent: "center",
-      alignItems: "center",
-      paddingHorizontal: 12,
-      paddingVertical: 6,
-      borderRadius: 10,
-      backgroundColor: colors.accent,
-    },
-    refreshText: {
-      color: colors.background,
-      fontSize: 14,
-      lineHeight: 20,
-      fontWeight: "800",
-    },
-    newsDescription: {
-      color: colors.muted,
-      fontSize: 15,
-      lineHeight: 22,
-    },
-    filters: {
-      gap: 8,
-    },
-    filterChip: {
-      minHeight: 44,
-      justifyContent: "center",
-      paddingHorizontal: 14,
-      borderRadius: 22,
-      borderWidth: 1,
-      borderColor: colors.border,
-      backgroundColor: colors.surface,
-    },
-    selectedChip: {
-      borderColor: colors.accent,
-      backgroundColor: colors.accent,
-    },
-    filterText: {
-      color: colors.text,
-      fontSize: 14,
-      fontWeight: "600",
-    },
-    selectedFilterText: {
-      color: colors.background,
-      fontSize: 14,
-      fontWeight: "700",
-    },
-    newsState: {
-      padding: 18,
-      gap: 12,
-      borderRadius: 16,
-      borderWidth: 1,
-      borderColor: colors.border,
-      backgroundColor: colors.surface,
-    },
-    newsStateTitle: {
-      color: colors.text,
-      fontSize: 17,
-      fontWeight: "700",
-    },
-    retryButton: {
-      alignSelf: "flex-start",
-      minHeight: 44,
-      justifyContent: "center",
-      paddingHorizontal: 16,
-      paddingVertical: 10,
-      borderRadius: 12,
-      backgroundColor: colors.accent,
-    },
-    newsCard: {
-      marginVertical: 6,
-      padding: 0,
-      borderRadius: 16,
-      borderWidth: 1,
-      borderColor: colors.border,
-      backgroundColor: colors.surface,
-      overflow: "hidden",
-      shadowColor: "#000",
-      shadowOffset: { width: 0, height: 2 },
-      shadowOpacity: 0.18,
-      shadowRadius: 4,
-      elevation: 3,
-    },
-    newsBody: {
-      paddingHorizontal: 12,
-      paddingVertical: 14,
-      gap: 10,
-    },
-    pressed: {
-      opacity: 0.75,
-    },
-    newsSource: {
-      color: colors.accent,
-      fontSize: 13,
-      fontWeight: "700",
-    },
-    newsTitle: {
-      color: colors.text,
-      fontSize: 20,
-      lineHeight: 28,
-      fontWeight: "700",
-    },
-    newsSummary: {
-      color: colors.muted,
-      fontSize: 16,
-      lineHeight: 24,
-    },
-    newsFooter: {
-      flexDirection: "row",
-      flexWrap: "wrap",
-      alignItems: "center",
-      justifyContent: "space-between",
-      gap: 8,
-      marginTop: 4,
-    },
-    newsDate: {
-      color: colors.muted,
-      fontSize: 12,
-      lineHeight: 18,
-    },
     safeArea: {
       flex: 1,
       backgroundColor: colors.background,
@@ -1156,17 +1002,20 @@ newsHeadingTitle: {
       backgroundColor: colors.background,
     },
     content: {
-      paddingHorizontal: 20,
+      paddingHorizontal: gutter,
       paddingBottom: 30,
     },
+    pressed: {
+      opacity: 0.8,
+    },
+
+    // Brand bar
     header: {
-      minHeight: 64,
+      minHeight: 60,
       flexDirection: "row",
       alignItems: "center",
       justifyContent: "space-between",
-      borderBottomWidth: 1,
-      borderBottomColor: colors.border,
-      marginBottom: 14,
+      marginBottom: 18,
     },
     brand: {
       flexDirection: "row",
@@ -1174,35 +1023,210 @@ newsHeadingTitle: {
       gap: 10,
     },
     logo: {
-      width: 40,
-      height: 40,
-      borderRadius: 8,
-      backgroundColor: "#1D7566",
+      width: 36,
+      height: 36,
+      borderRadius: radius.sm,
+      backgroundColor: colors.accent,
       alignItems: "center",
       justifyContent: "center",
     },
     logoText: {
-      color: "#FFFFFF",
-      fontSize: 28,
-      fontWeight: "700",
-      fontFamily: "serif",
+      color: colors.background,
+      fontSize: 21,
+      lineHeight: 26,
+      fontWeight: "800",
     },
     brandText: {
+      ...type.heading,
       color: colors.text,
-      fontSize: 19,
       fontWeight: "700",
     },
     notificationButton: {
-      width: 48,
-      height: 48,
+      width: 44,
+      height: 44,
+      borderRadius: radius.pill,
       alignItems: "center",
       justifyContent: "center",
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.border,
     },
+
+    // Greeting
+    date: {
+      ...type.eyebrow,
+      color: colors.accent,
+      marginBottom: 6,
+    },
+    greeting: {
+      ...type.display,
+      color: colors.text,
+      marginBottom: 22,
+    },
+
+    // News feed
+    newsSection: {
+      gap: 14,
+      marginBottom: 28,
+    },
+    newsHeading: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: 12,
+    },
+    newsHeadingTitle: {
+      ...type.heading,
+      flex: 1,
+      minWidth: 0,
+      color: colors.text,
+    },
+    refreshButton: {
+      minHeight: 36,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 6,
+      paddingHorizontal: 12,
+      borderRadius: radius.pill,
+      backgroundColor: colors.accentSoft,
+    },
+    refreshText: {
+      ...type.caption,
+      color: colors.accent,
+      fontWeight: "700",
+    },
+    newsDescription: {
+      ...type.body,
+      fontSize: 15,
+      lineHeight: 22,
+      color: colors.muted,
+    },
+    filters: {
+      gap: 8,
+      paddingRight: gutter,
+    },
+    filterChip: {
+      minHeight: 40,
+      justifyContent: "center",
+      paddingHorizontal: 16,
+      borderRadius: radius.pill,
+      borderWidth: 1,
+      borderColor: colors.border,
+      backgroundColor: colors.surface,
+    },
+    selectedChip: {
+      borderColor: colors.accent,
+      backgroundColor: colors.accent,
+    },
+    filterText: {
+      ...type.label,
+      fontSize: 14,
+      color: colors.text,
+    },
+    selectedFilterText: {
+      ...type.label,
+      fontSize: 14,
+      color: colors.background,
+      fontWeight: "700",
+    },
+    newsState: {
+      ...card(colors),
+      padding: 18,
+      gap: 12,
+    },
+    newsStateTitle: {
+      ...type.heading,
+      color: colors.text,
+    },
+    retryButton: {
+      alignSelf: "flex-start",
+      minHeight: 44,
+      justifyContent: "center",
+      paddingHorizontal: 18,
+      borderRadius: radius.pill,
+      backgroundColor: colors.accent,
+    },
+    newsCard: {
+      ...card(colors),
+      borderRadius: radius.xl - 4,
+      overflow: "hidden",
+    },
+    newsBody: {
+      padding: 16,
+      gap: 8,
+    },
+    newsMeta: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      justifyContent: "space-between",
+      alignItems: "center",
+      gap: 8,
+    },
+    newsSource: {
+      ...type.eyebrow,
+      color: colors.accent,
+    },
+    newsArea: {
+      ...type.caption,
+      fontSize: 12,
+      color: colors.muted,
+    },
+    newsTitle: {
+      color: colors.text,
+      fontSize: 19,
+      lineHeight: 25,
+      fontWeight: "700",
+      letterSpacing: -0.3,
+    },
+    newsSummary: {
+      ...type.body,
+      fontSize: 15,
+      lineHeight: 22,
+      color: colors.muted,
+    },
+    newsFooter: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: 8,
+      marginTop: 6,
+      paddingTop: 12,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: colors.border,
+    },
+    newsDate: {
+      ...type.caption,
+      color: colors.muted,
+    },
+    sectionTitle: {
+      ...type.title,
+      color: colors.text,
+    },
+    sectionLink: {
+      ...type.label,
+      fontSize: 14,
+      color: colors.accent,
+      fontWeight: "700",
+    },
+    moreNewsButton: {
+      minHeight: 48,
+      alignItems: "center",
+      justifyContent: "center",
+      paddingHorizontal: 16,
+      borderRadius: radius.pill,
+      borderWidth: 1,
+      borderColor: colors.border,
+      backgroundColor: colors.surface,
+    },
+
+    // Notifications sheet
     notificationOverlay: {
       flex: 1,
-      padding: 20,
+      padding: gutter,
       justifyContent: "center",
-      backgroundColor: "rgba(0,0,0,0.5)",
+      backgroundColor: "rgba(0,0,0,0.55)",
     },
     notificationPanel: {
       width: "100%",
@@ -1211,109 +1235,40 @@ newsHeadingTitle: {
       backgroundColor: colors.surface,
       borderColor: colors.border,
       borderWidth: 1,
-      borderRadius: 18,
-      padding: 20,
-      gap: 16,
+      borderRadius: radius.xl,
+      padding: 22,
+      gap: 14,
+      ...shadow(colors, "floating"),
     },
     notificationClose: {
       minHeight: 48,
       justifyContent: "center",
       alignItems: "center",
-      padding: 12,
-      borderRadius: 12,
+      borderRadius: radius.pill,
       backgroundColor: colors.accent,
     },
-    date: {
-      color: colors.accent,
-      fontSize: 12,
-      fontWeight: "800",
-      letterSpacing: 1,
-      marginBottom: 8,
-    },
-    greeting: {
-      color: colors.text,
-      fontSize: 26,
-      lineHeight: 32,
-      fontWeight: "700",
-      fontFamily: "serif",
-      marginBottom: 0,
-    },
-    sectionHeader: {
-      flexDirection: "row",
-      alignItems: "center",
-      justifyContent: "space-between",
-      marginBottom: 12,
-    },
-    sectionTitle: {
-      color: colors.text,
-      fontSize: 25,
-      fontWeight: "700",
-      fontFamily: "serif",
-    },
-    sectionLink: {
-      color: colors.accent,
-      fontSize: 14,
-      fontWeight: "700",
-    },
-    groupsRow: {
-      flexDirection: "row",
-      gap: 12,
-      marginBottom: 22,
-    },
-    groupCard: {
-      flex: 1,
-      backgroundColor: colors.surface,
-      borderRadius: 14,
-      borderWidth: 1,
-      borderColor: colors.border,
-      overflow: "hidden",
-    },
-    groupImage: {
-      width: "100%",
-      height: 105,
-      resizeMode: "cover",
-    },
-    groupBody: {
-      padding: 11,
-    },
-    groupTitle: {
-      color: colors.text,
-      fontSize: 14,
-      fontWeight: "700",
-    },
-    groupDetails: {
-      color: colors.muted,
-      fontSize: 11,
-      marginTop: 5,
-    },
+
+    // Closing encouragement card
     messageCard: {
       flexDirection: "row",
       alignItems: "center",
-      backgroundColor: isDark
-        ? "#29261B"
-        : "#FFF6D9",
-      borderWidth: 1,
-      borderColor: isDark
-        ? "#403A25"
-        : "#E8DCAD",
-      borderRadius: 16,
+      backgroundColor: colors.accentSoft,
+      borderRadius: radius.lg,
       padding: 18,
-      gap: 15,
+      gap: 14,
       marginBottom: 20,
     },
     messageContent: {
       flex: 1,
+      gap: 2,
     },
     messageTitle: {
+      ...type.label,
       color: colors.text,
-      fontSize: 14,
-      fontWeight: "700",
     },
     messageText: {
+      ...type.caption,
       color: colors.muted,
-      fontSize: 12,
-      lineHeight: 17,
-      marginTop: 4,
     },
   });
 }

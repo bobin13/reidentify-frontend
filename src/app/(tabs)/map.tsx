@@ -20,9 +20,10 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { ModalSafeArea } from "../../components/modal-safe-area";
 import EventMap from "../../components/event-map";
 import type { AppColors } from "../../constants/app-colors";
+import { card, radius, shadow, type } from "../../constants/theme";
 import { useAuth } from "../../context/auth-context";
 import { useAppTheme } from "../../context/theme-context";
 import { auth } from "../../lib/firebase";
@@ -733,11 +734,8 @@ export default function MapScreen() {
                 web: "tune",
               }}
               size={21}
-              tintColor={interestsOnly ? colors.background : colors.accent}
+              tintColor={interestsOnly ? colors.background : colors.text}
             />
-            <Text style={[styles.link, interestsOnly && styles.activeText]}>
-              Filters
-            </Text>
           </Pressable>
         </View>
         <View style={styles.toolbar}>
@@ -809,10 +807,22 @@ export default function MapScreen() {
             accessibilityLabel="Refresh nearby activities"
             disabled={loading}
             accessibilityState={{ disabled: loading }}
-            style={styles.textButton}
+            style={styles.iconButton}
             onPress={() => setReload((n) => n + 1)}
           >
-            <Text style={styles.link}>{loading ? "Loading…" : "Refresh"}</Text>
+            {loading ? (
+              <ActivityIndicator color={colors.accent} />
+            ) : (
+              <SymbolView
+                name={{
+                  ios: "arrow.clockwise",
+                  android: "refresh",
+                  web: "refresh",
+                }}
+                size={19}
+                tintColor={colors.text}
+              />
+            )}
           </Pressable>
         </View>
       </View>
@@ -1096,7 +1106,7 @@ export default function MapScreen() {
         animationType="slide"
         onRequestClose={() => setFiltersOpen(false)}
       >
-        <SafeAreaView edges={["top", "bottom"]} style={styles.container}>
+        <ModalSafeArea edges={["top", "bottom"]} style={styles.container}>
           <View style={styles.filterHeader}>
             <Text accessibilityRole="header" style={styles.sectionTitle}>
               Activity filters
@@ -1173,7 +1183,7 @@ export default function MapScreen() {
               Upcoming activities for the next 31 days.
             </Text>
           </ScrollView>
-        </SafeAreaView>
+        </ModalSafeArea>
       </Modal>
     </KeyboardAvoidingView>
   );
@@ -2034,9 +2044,9 @@ function createStyles(colors: AppColors) {
   return StyleSheet.create({
     container: { flex: 1, minHeight: 0, backgroundColor: colors.background },
     mapHeader: {
-      paddingHorizontal: 10,
+      paddingHorizontal: 12,
       paddingTop: 8,
-      paddingBottom: 8,
+      paddingBottom: 10,
       gap: 8,
       zIndex: 20,
     },
@@ -2047,12 +2057,21 @@ function createStyles(colors: AppColors) {
       zIndex: 20,
     },
     filterButton: {
-      minHeight: 52,
-      paddingHorizontal: 10,
-      gap: 4,
+      width: 50,
+      height: 50,
       alignItems: "center",
       justifyContent: "center",
-      borderRadius: 14,
+      borderRadius: radius.md,
+      borderWidth: 1,
+      borderColor: colors.border,
+      backgroundColor: colors.surface,
+    },
+    iconButton: {
+      width: 44,
+      height: 44,
+      alignItems: "center",
+      justifyContent: "center",
+      borderRadius: radius.pill,
       borderWidth: 1,
       borderColor: colors.border,
       backgroundColor: colors.surface,
@@ -2060,7 +2079,7 @@ function createStyles(colors: AppColors) {
     mapAndPanel: { flex: 1, minHeight: 0 },
     panel: {
       minHeight: 0,
-      borderTopWidth: 1,
+      borderTopWidth: StyleSheet.hairlineWidth,
       borderTopColor: colors.border,
       backgroundColor: colors.background,
       overflow: "hidden",
@@ -2070,26 +2089,26 @@ function createStyles(colors: AppColors) {
       flexDirection: "row",
       alignItems: "center",
       gap: 6,
-      paddingHorizontal: 12,
+      paddingHorizontal: 16,
       paddingVertical: 8,
       minHeight: 56,
     },
-    panelTitleGroup: { flex: 1, minWidth: 0, gap: 3 },
-    panelTitle: { color: colors.text, fontSize: 18, fontWeight: "700" },
+    panelTitleGroup: { flex: 1, minWidth: 0, gap: 2 },
+    panelTitle: { ...type.heading, color: colors.text, fontWeight: "700" },
     panelButton: {
-      minHeight: 48,
-      minWidth: 48,
+      minHeight: 44,
+      minWidth: 44,
       paddingHorizontal: 6,
       justifyContent: "center",
       alignItems: "center",
     },
     panelScroll: { flex: 1, minHeight: 0 },
-    panelContent: { padding: 14, paddingTop: 4, gap: 12 },
+    panelContent: { padding: 16, paddingTop: 4, gap: 12 },
     schedule: { gap: 8 },
     eventPhoto: {
       width: "100%",
-      height: 140,
-      borderRadius: 12,
+      height: 150,
+      borderRadius: radius.md,
       marginBottom: 10,
     },
     timeSlot: { gap: 4, paddingVertical: 6 },
@@ -2113,22 +2132,22 @@ function createStyles(colors: AppColors) {
       alignItems: "center",
       borderWidth: 1,
       borderColor: colors.border,
-      borderRadius: 14,
+      borderRadius: radius.md,
       backgroundColor: colors.surface,
-      minHeight: 52,
-      paddingLeft: 12,
+      minHeight: 50,
+      paddingLeft: 14,
     },
     searchInput: {
       flex: 1,
       minWidth: 0,
       color: colors.text,
-      fontSize: 17,
+      fontSize: 16,
       paddingVertical: 12,
       paddingHorizontal: 8,
     },
     clearSearch: {
       minWidth: 44,
-      minHeight: 48,
+      minHeight: 44,
       justifyContent: "center",
       alignItems: "center",
     },
@@ -2136,25 +2155,21 @@ function createStyles(colors: AppColors) {
       position: "absolute",
       top: "100%",
       left: 0,
-      right: -76,
+      right: -58,
       marginTop: 6,
       backgroundColor: colors.surface,
-      borderRadius: 14,
+      borderRadius: radius.md,
       borderWidth: 1,
       borderColor: colors.border,
-      elevation: 8,
-      shadowColor: "#000000",
-      shadowOpacity: 0.2,
-      shadowRadius: 8,
-      shadowOffset: { width: 0, height: 3 },
+      ...shadow(colors, "raised"),
       overflow: "hidden",
     },
     suggestion: {
-      minHeight: 56,
+      minHeight: 54,
       paddingHorizontal: 14,
       paddingVertical: 10,
-      gap: 3,
-      borderBottomWidth: 1,
+      gap: 2,
+      borderBottomWidth: StyleSheet.hairlineWidth,
       borderBottomColor: colors.border,
     },
     suggestionFooter: { padding: 12, gap: 6 },
@@ -2169,53 +2184,60 @@ function createStyles(colors: AppColors) {
       flexWrap: "wrap",
       justifyContent: "space-between",
       alignItems: "center",
-      gap: 6,
+      gap: 8,
     },
     locationButton: {
       minHeight: 44,
       minWidth: 44,
       justifyContent: "center",
-      paddingHorizontal: 10,
-      paddingVertical: 8,
-      borderRadius: 22,
+      paddingHorizontal: 14,
+      borderRadius: radius.pill,
       backgroundColor: colors.accent,
       flexDirection: "row",
       gap: 6,
       alignItems: "center",
     },
-    locationText: { color: colors.background, fontSize: 14, fontWeight: "700" },
+    locationText: {
+      ...type.label,
+      fontSize: 14,
+      color: colors.background,
+      fontWeight: "700",
+    },
     distancePicker: {
       flex: 1,
       minWidth: 142,
-      maxWidth: 180,
+      maxWidth: 190,
       flexDirection: "row",
-      padding: 2,
+      padding: 3,
       gap: 2,
-      borderRadius: 14,
-      borderWidth: 1,
-      borderColor: colors.border,
-      backgroundColor: colors.surface,
+      borderRadius: radius.pill,
+      backgroundColor: colors.surfaceAlt,
     },
     distanceOption: {
       flex: 1,
       minWidth: 0,
-      minHeight: 44,
+      minHeight: 38,
       paddingHorizontal: 2,
-      borderRadius: 11,
+      borderRadius: radius.pill,
       justifyContent: "center",
       alignItems: "center",
     },
-    distanceText: { color: colors.text, fontSize: 14, fontWeight: "700" },
+    distanceText: {
+      ...type.label,
+      fontSize: 13,
+      color: colors.muted,
+    },
     statusArea: { gap: 4, paddingHorizontal: 2 },
     statusRow: { flexDirection: "row", alignItems: "center", gap: 12 },
-    statusText: { flex: 1, color: colors.muted, fontSize: 14, lineHeight: 21 },
+    statusText: { ...type.caption, flex: 1, fontSize: 14, lineHeight: 20, color: colors.muted },
     outlineButton: {
-      minHeight: 48,
-      paddingHorizontal: 14,
-      paddingVertical: 12,
-      borderRadius: 12,
+      minHeight: 46,
+      paddingHorizontal: 18,
+      paddingVertical: 10,
+      borderRadius: radius.pill,
       borderWidth: 1,
       borderColor: colors.border,
+      backgroundColor: colors.surface,
       justifyContent: "center",
       alignItems: "center",
     },
@@ -2225,69 +2247,38 @@ function createStyles(colors: AppColors) {
       alignSelf: "flex-start",
       paddingVertical: 8,
     },
-    label: {
-      color: colors.text,
-      fontSize: 16,
-      lineHeight: 23,
-      fontWeight: "600",
-    },
-    body: { color: colors.text, fontSize: 16, lineHeight: 24 },
-    help: { color: colors.muted, fontSize: 14, lineHeight: 21 },
-    link: {
-      color: colors.accent,
-      fontSize: 15,
-      fontWeight: "700",
-      lineHeight: 23,
-    },
-    notice: {
-      padding: 16,
-      gap: 8,
-      backgroundColor: colors.surface,
-      borderRadius: 14,
-      borderWidth: 1,
-      borderColor: colors.border,
-    },
+    label: { ...type.label, fontSize: 16, lineHeight: 22, color: colors.text },
+    body: { ...type.body, color: colors.text },
+    help: { ...type.caption, fontSize: 14, lineHeight: 20, color: colors.muted },
+    link: { ...type.label, color: colors.accent, fontWeight: "700" },
+    notice: { ...card(colors), padding: 16, gap: 8 },
     mapFrame: {
       minHeight: 0,
       overflow: "hidden",
       backgroundColor: colors.surface,
     },
     chip: {
-      minHeight: 44,
+      minHeight: 40,
       paddingHorizontal: 16,
-      borderRadius: 22,
+      borderRadius: radius.pill,
       justifyContent: "center",
       borderWidth: 1,
       borderColor: colors.border,
       backgroundColor: colors.surface,
     },
-    chipText: { color: colors.text, fontSize: 15, fontWeight: "600" },
+    chipText: { ...type.label, fontSize: 14, color: colors.text },
     activeChip: { backgroundColor: colors.accent, borderColor: colors.accent },
-    activeText: { color: colors.background },
+    activeText: { color: colors.background, fontWeight: "700" },
     disabled: { opacity: 0.5 },
-    sectionTitle: {
-      color: colors.text,
-      fontSize: 21,
-      fontWeight: "700",
-      lineHeight: 29,
+    sectionTitle: { ...type.title, fontSize: 20, color: colors.text },
+    eventTitle: { ...type.heading, fontSize: 18, lineHeight: 24, color: colors.text, fontWeight: "700" },
+    card: { ...card(colors), padding: 16, gap: 8 },
+    selectedCard: {
+      borderColor: colors.accent,
+      backgroundColor: colors.accentSoft,
     },
-    eventTitle: {
-      color: colors.text,
-      fontSize: 18,
-      fontWeight: "700",
-      lineHeight: 26,
-    },
-    card: {
-      padding: 16,
-      gap: 8,
-      borderWidth: 1,
-      borderColor: colors.border,
-      borderRadius: 16,
-      backgroundColor: colors.surface,
-    },
-    selectedCard: { borderColor: colors.accent, borderWidth: 2 },
     activity: {
-      borderTopWidth: 1,
+      borderTopWidth: StyleSheet.hairlineWidth,
       borderTopColor: colors.border,
       paddingTop: 12,
       gap: 8,
@@ -2297,7 +2288,7 @@ function createStyles(colors: AppColors) {
     dateRow: {
       paddingTop: 10,
       gap: 4,
-      borderTopWidth: 1,
+      borderTopWidth: StyleSheet.hairlineWidth,
       borderTopColor: colors.border,
     },
   });
