@@ -52,12 +52,23 @@ const API_URL = (
 // News matched to the signed-in member's interests, ten stories per page.
 // The backend calls the news provider once per interest topic with a
 // half-second gap, so a first page can take several seconds.
-export function fetchInterestNews(account: User, offset = 0) {
+export const INTEREST_PAGE = 10;
+
+// `limit` (1-10) lets the first request return a couple of stories quickly.
+export function fetchInterestNews(
+  account: User,
+  offset = 0,
+  limit = INTEREST_PAGE,
+) {
+  const query = new URLSearchParams();
+  if (offset > 0) query.set("offset", String(offset));
+  if (limit !== INTEREST_PAGE) query.set("limit", String(limit));
+  const search = query.toString();
   return apiRequest<InterestNewsResult>(
     account,
     "GET",
     undefined,
-    `/api/news/for-you${offset > 0 ? `?offset=${offset}` : ""}`,
+    `/api/news/for-you${search ? `?${search}` : ""}`,
     { timeoutMs: 45000 },
   );
 }

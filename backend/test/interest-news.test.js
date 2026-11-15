@@ -119,7 +119,7 @@ test("topic listings and article details are cached and de-duplicated in flight"
   assert.equal(detail.summary, "Lead paragraph");
 });
 
-test("a 429 from the provider becomes a 503 and pushes the next request back a second", async () => {
+test("a one-off 429 is retried after a second instead of failing", async () => {
   const time = virtualTime();
   const starts = [];
   let calls = 0;
@@ -127,10 +127,36 @@ test("a 429 from the provider becomes a 503 and pushes the next request back a s
     now: time.now,
     sleep: time.sleep,
     getApiKey: () => "key",
-    fetchImpl: async () => {
+    fetchImpl: async (url) => {
       starts.push(time.now());
       calls++;
-      return calls === 1 ? jsonResponse({}, 429) : jsonResponse(listing("food", 1));
+      return calls === 1
+        ? jsonResponse({}, 429)
+        : jsonResponse(listing(new URL(url).searchParams.get("topic"), 1));
+    },
+  });
+  const [first, second] = await Promise.all([
+    client.listTopic("cycling"),
+    client.listTopic("food"),
+  ]);
+  assert.equal(first.articles[0].uuid, "cycling-0");
+  assert.equal(second.articles[0].uuid, "food-0");
+  assert.equal(starts[1] - starts[0], 1000);
+  assert.equal(starts[2] - starts[1], SPACING_MS);
+});
+
+test("a persistent 429 becomes a rate-limited 503 and pushes the next request back", async () => {
+  const time = virtualTime();
+  const starts = [];
+  const client = createFreeNewsClient({
+    now: time.now,
+    sleep: time.sleep,
+    getApiKey: () => "key",
+    fetchImpl: async (url) => {
+      starts.push(time.now());
+      return new URL(url).searchParams.get("topic") === "cycling"
+        ? jsonResponse({}, 429)
+        : jsonResponse(listing("food", 1));
     },
   });
   const [limited, ok] = await Promise.allSettled([
@@ -138,8 +164,10 @@ test("a 429 from the provider becomes a 503 and pushes the next request back a s
     client.listTopic("food"),
   ]);
   assert.equal(limited.reason.status, 503);
+  assert.equal(limited.reason.rateLimited, true);
   assert.equal(ok.status, "fulfilled");
-  assert.equal(starts[1] - starts[0], 1000);
+  assert.equal(starts.length, 4);
+  assert.equal(starts[3] - starts[2], 1000);
 });
 
 function fakeApp() {
@@ -266,6 +294,33 @@ test("for-you offset 10 fetches the next listing page only where the provider ha
   assert.equal(res.value.offset, 10);
   assert.equal(res.value.nextOffset, 20);
   assert.deepEqual(client.listCalls, [["cycling", 0], ["cycling", 10], ["food", 0]]);
+});
+
+test("for-you limit serves a small first batch, then the rest of the page", async () => {
+  const app = fakeApp();
+  const client = fakeClient({ perTopic: { cycling: 10, food: 10 } });
+  installInterestNewsRoutes(
+    app,
+    fakeDb([{ topic: "cycling", activity: "Cycling" }, { topic: "food", activity: "Baking" }]),
+    { client },
+  );
+  const route = app.routes.get("/api/news/for-you");
+
+  const first = await invoke(route, { limit: "2" });
+  assert.equal(first.value.articles.length, 2);
+  assert.equal(first.value.nextOffset, 2);
+  assert.equal(client.detailCalls.length, 2, "details only for the first batch");
+
+  const rest = await invoke(route, { offset: "2", limit: "8" });
+  assert.equal(rest.value.articles.length, 8);
+  assert.equal(rest.value.nextOffset, 10);
+  const ids = [...first.value.articles, ...rest.value.articles].map((a) => a.id);
+  assert.equal(new Set(ids).size, 10, "no story repeats across the two batches");
+
+  for (const limit of ["0", "11", "two"]) {
+    const bad = await invoke(route, { limit });
+    assert.equal(bad.code, 400);
+  }
 });
 
 test("for-you with no mapped interests returns a notice and never calls the provider", async () => {

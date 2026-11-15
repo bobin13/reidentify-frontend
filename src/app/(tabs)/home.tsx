@@ -37,11 +37,15 @@ import {
 import {
   fetchAreaNews,
   fetchInterestNews,
+  INTEREST_PAGE,
   type InterestNewsResult,
   type NewsArticle,
   type NewsResult,
 } from "../../lib/news";
 import { auth } from "../../lib/firebase";
+
+// Stories shown before the rest of the first For you page loads.
+const FIRST_INTEREST_BATCH = 2;
 
 const NEWS_FILTERS = [
   { id: "all", label: "Latest" },
@@ -189,19 +193,18 @@ export default function HomeScreen() {
         error: null,
       }));
 
-      try {
-        const page = await fetchInterestNews(account, offset);
+      const current = () =>
+        !controller.signal.aborted &&
+        interestRequest.current === controller;
 
-        if (
-          controller.signal.aborted ||
-          interestRequest.current !== controller
-        ) {
-          return;
-        }
-
+      const apply = (
+        page: InterestNewsResult,
+        append: boolean,
+        filling: boolean,
+      ) =>
         setInterest((old) => {
           const kept =
-            old.owner === uid && offset > 0 ? old.articles : [];
+            old.owner === uid && append ? old.articles : [];
           const seen = new Set(kept.map((item) => item.id));
 
           return {
@@ -214,11 +217,42 @@ export default function HomeScreen() {
             topics: page.topics,
             notice: page.notice,
             loading: false,
-            loadingMore: false,
+            loadingMore: filling,
             error: null,
             loaded: true,
           };
         });
+
+      try {
+        // A fresh feed asks for a couple of stories first so something
+        // appears quickly, then fills the rest of the page in the background.
+        const first = await fetchInterestNews(
+          account,
+          offset,
+          offset === 0 ? FIRST_INTEREST_BATCH : INTEREST_PAGE,
+        );
+        if (!current()) return;
+
+        const fillFrom = offset === 0 ? first.nextOffset : null;
+        apply(first, offset > 0, fillFrom !== null);
+
+        if (fillFrom !== null) {
+          try {
+            const rest = await fetchInterestNews(
+              account,
+              fillFrom,
+              INTEREST_PAGE - FIRST_INTEREST_BATCH,
+            );
+            if (!current()) return;
+            apply(rest, true, false);
+          } catch {
+            // Keep the stories already shown; nextOffset still points at the
+            // gap, so Load more picks up from there.
+            if (current()) {
+              setInterest((old) => ({ ...old, loadingMore: false }));
+            }
+          }
+        }
       } catch (error) {
         if (
           controller.signal.aborted ||
@@ -622,33 +656,6 @@ export default function HomeScreen() {
             >
               {title}
             </Text>
-
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={`Refresh ${title}`}
-              accessibilityState={{
-                disabled: refreshing,
-              }}
-              disabled={refreshing}
-              onPress={() => void loadNews()}
-              style={styles.refreshButton}
-              hitSlop={6}
-            >
-              <SymbolView
-                name={{
-                  ios: "arrow.clockwise",
-                  android: "refresh",
-                  web: "refresh",
-                }}
-                size={15}
-                tintColor={colors.accent}
-              />
-              <Text style={styles.refreshText}>
-                {refreshing
-                  ? "Refreshing…"
-                  : "Refresh"}
-              </Text>
-            </Pressable>
           </View>
 
           {cityName &&
@@ -834,7 +841,10 @@ export default function HomeScreen() {
           {!feedLoading &&
             !visibleArticles.length &&
             !(forYou
-              ? feedProblem || !interestReady || !interest.loaded
+              ? feedProblem ||
+                !interestReady ||
+                !interest.loaded ||
+                interest.loadingMore
               : problem && !result?.articles.length) && (
               <View style={styles.newsState}>
                 <Text style={styles.newsStateTitle}>
@@ -1080,21 +1090,6 @@ function createStyles(colors: AppColors) {
       flex: 1,
       minWidth: 0,
       color: colors.text,
-    },
-    refreshButton: {
-      minHeight: 36,
-      flexDirection: "row",
-      alignItems: "center",
-      justifyContent: "center",
-      gap: 6,
-      paddingHorizontal: 12,
-      borderRadius: radius.pill,
-      backgroundColor: colors.accentSoft,
-    },
-    refreshText: {
-      ...type.caption,
-      color: colors.accent,
-      fontWeight: "700",
     },
     newsDescription: {
       ...type.body,

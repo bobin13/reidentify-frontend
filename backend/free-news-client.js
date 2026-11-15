@@ -3,10 +3,14 @@
 // The provider allows 2 requests per second per API key and 5,000 per day.
 // All requests go through one process-wide queue that starts them at least
 // SPACING_MS apart, so concurrent users cannot exceed the limit together.
+// Exactly 500ms still drew occasional 429s (three starts can fall inside one
+// second), so the spacing has headroom and a 429 is retried after a pause.
 // Topic listings and article details are cached to keep the daily budget low.
 
 const API_BASE_URL = "https://api.freenewsapi.io/v1";
-const SPACING_MS = 500;
+const SPACING_MS = 550;
+const RATE_LIMIT_PAUSE_MS = 1000;
+const RATE_LIMIT_RETRIES = 2;
 const LISTING_TTL_MS = 15 * 60 * 1000;
 const DETAILS_TTL_MS = 24 * 60 * 60 * 1000;
 const DETAILS_CACHE_MAX = 2000;
@@ -14,10 +18,12 @@ const LISTING_CACHE_MAX = 400;
 const PAGE_SIZE = 10;
 
 class FreeNewsError extends Error {
-  constructor(status, message) {
+  constructor(status, message, { rateLimited = false } = {}) {
     super(message);
     this.name = "FreeNewsError";
     this.status = status;
+    // True when the provider kept answering 429 after every retry.
+    this.rateLimited = rateLimited;
   }
 }
 
@@ -62,19 +68,35 @@ function createFreeNewsClient({
 
     return schedule(async () => {
       let response;
-      try {
-        response = await fetchImpl(url, {
-          headers: { Accept: "application/json", "x-api-key": apiKey.trim() },
-          signal: AbortSignal.timeout(10000),
-        });
-      } catch (error) {
-        const timedOut = error?.name === "TimeoutError";
-        throw new FreeNewsError(
-          timedOut ? 504 : 502,
-          timedOut
-            ? "The news provider took too long. Please try again."
-            : "The news provider is unavailable. Please try again.",
-        );
+      // Retries stay inside this queue turn, so nothing else jumps ahead
+      // while the provider's rate window clears.
+      for (let attempt = 0; ; attempt++) {
+        try {
+          response = await fetchImpl(url, {
+            headers: { Accept: "application/json", "x-api-key": apiKey.trim() },
+            signal: AbortSignal.timeout(10000),
+          });
+        } catch (error) {
+          const timedOut = error?.name === "TimeoutError";
+          throw new FreeNewsError(
+            timedOut ? 504 : 502,
+            timedOut
+              ? "The news provider took too long. Please try again."
+              : "The news provider is unavailable. Please try again.",
+          );
+        }
+        if (response.status !== 429) break;
+        if (attempt >= RATE_LIMIT_RETRIES) {
+          // Back off a full second before the next queued request.
+          lastStart = now() + RATE_LIMIT_PAUSE_MS - spacingMs;
+          throw new FreeNewsError(
+            503,
+            "News is busy right now. Please try again in a moment.",
+            { rateLimited: true },
+          );
+        }
+        await sleep(RATE_LIMIT_PAUSE_MS);
+        lastStart = now();
       }
       let data;
       try {
@@ -83,14 +105,6 @@ function createFreeNewsClient({
         throw new FreeNewsError(
           502,
           "The news provider returned an unreadable response.",
-        );
-      }
-      if (response.status === 429) {
-        // Back off a full second before the next queued request.
-        lastStart = now() + 1000 - spacingMs;
-        throw new FreeNewsError(
-          503,
-          "News is busy right now. Please try again in a moment.",
         );
       }
       if (!response.ok) {

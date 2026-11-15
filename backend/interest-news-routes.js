@@ -63,9 +63,9 @@ async function topicsForUser(db, userId) {
   return [...byTopic.values()];
 }
 
-// Merge enough listing pages from every topic to cover [offset, offset+PAGE).
-async function mergedListing(client, topics, offset) {
-  const needed = offset + PAGE;
+// Merge enough listing pages from every topic to cover [offset, offset+limit).
+async function mergedListing(client, topics, offset, limit = PAGE) {
+  const needed = offset + limit;
   const pagesNeeded = Math.min(
     MAX_LISTING_PAGES_PER_TOPIC,
     Math.ceil(needed / client.pageSize),
@@ -114,6 +114,18 @@ function installInterestNewsRoutes(app, db, { client = sharedFreeNewsClient() } 
       ) {
         return res.status(400).json({ message: "Check the news page." });
       }
+      // The app asks for a small first batch so stories appear quickly, then
+      // fills the rest of the page from the now-cached listings.
+      const rawLimit = req.query.limit ?? String(PAGE);
+      const limit = Number(rawLimit);
+      if (
+        typeof rawLimit !== "string" ||
+        !Number.isInteger(limit) ||
+        limit < 1 ||
+        limit > PAGE
+      ) {
+        return res.status(400).json({ message: "Check the news page." });
+      }
 
       const topics = await topicsForUser(db, req.userId);
       if (!topics.length) {
@@ -131,10 +143,11 @@ function installInterestNewsRoutes(app, db, { client = sharedFreeNewsClient() } 
         client,
         topics,
         offset,
+        limit,
       );
       if (failures.length === topics.length) throw failures[0].error;
 
-      const slice = merged.slice(offset, offset + PAGE);
+      const slice = merged.slice(offset, offset + limit);
       const articles = [];
       for (const item of slice) {
         let detail;
@@ -142,7 +155,15 @@ function installInterestNewsRoutes(app, db, { client = sharedFreeNewsClient() } 
           detail = await client.articleDetails(item.uuid);
         } catch (error) {
           // Keep serving the rest of the page; this story has no link yet.
-          if (error instanceof FreeNewsError && error.status === 503) throw error;
+          // A missing key fails the page, but a story still rate-limited
+          // after retries is only skipped: it loads on the next refresh.
+          if (
+            error instanceof FreeNewsError &&
+            error.status === 503 &&
+            !error.rateLimited
+          ) {
+            throw error;
+          }
           continue;
         }
         const url = safeHttpsUrl(detail.url);
@@ -163,11 +184,11 @@ function installInterestNewsRoutes(app, db, { client = sharedFreeNewsClient() } 
         });
       }
 
-      const hasMore = merged.length > offset + PAGE || anyMore;
+      const hasMore = merged.length > offset + limit || anyMore;
       res.json({
         articles,
         offset,
-        nextOffset: hasMore ? offset + PAGE : null,
+        nextOffset: hasMore ? offset + limit : null,
         topics,
         generatedAt: new Date().toISOString(),
         notice: failures.length
