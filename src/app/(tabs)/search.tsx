@@ -15,7 +15,10 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import {
+  SafeAreaView,
+  useSafeAreaInsets,
+} from "react-native-safe-area-context";
 import { SymbolView } from "expo-symbols";
 
 import type { AppColors } from "../../constants/app-colors";
@@ -74,6 +77,8 @@ function normalize(value: string) {
     .trim();
 }
 
+const BANNER_MS = 5000;
+
 function sameSelection(a: readonly string[], b: readonly string[]) {
   const left = new Set(a);
   const right = new Set(b);
@@ -87,6 +92,7 @@ export default function SearchScreen() {
   const { colors } = useAppTheme();
   const { user, loading, updateProfile } = useAuth();
   const styles = useMemo(() => createStyles(colors), [colors]);
+  const insets = useSafeAreaInsets();
   const [section, setSection] = useState<Section>("interests");
   const [category, setCategory] = useState<InterestCategory | null>(null);
   const [query, setQuery] = useState("");
@@ -106,6 +112,8 @@ export default function SearchScreen() {
     text: string;
     error: boolean;
   } | null>(null);
+  const [bannerShown, setBannerShown] = useState(false);
+  const bannerTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveLock = useRef(false);
   const mounted = useRef(true);
   const uid = user?.id ?? "";
@@ -126,8 +134,20 @@ export default function SearchScreen() {
     mounted.current = true;
     return () => {
       mounted.current = false;
+      if (bannerTimer.current) clearTimeout(bannerTimer.current);
     };
   }, []);
+
+  // Show the status banner beside the save button, then hide it again after
+  // five seconds. Each new change restarts the countdown.
+  function flashBanner() {
+    if (bannerTimer.current) clearTimeout(bannerTimer.current);
+    setBannerShown(true);
+    bannerTimer.current = setTimeout(() => {
+      bannerTimer.current = null;
+      if (mounted.current) setBannerShown(false);
+    }, BANNER_MS);
+  }
 
   useEffect(() => {
     // Carry explicitly chosen guest interests into the first sign-in.
@@ -158,6 +178,7 @@ export default function SearchScreen() {
     if (!uid) setGuestInterestDraft(recognized);
     setDraft({ owner: uid, values: recognized });
     setFeedback(null);
+    flashBanner();
   }
 
   function toggle(interest: string) {
@@ -184,11 +205,13 @@ export default function SearchScreen() {
       if (!mounted.current || currentUid.current !== owner) return;
       if (!result.ok) {
         setFeedback({ text: result.message, error: true });
+        flashBanner();
         return;
       }
       setDraft(null);
       setCategory(null);
       setFeedback({ text: "Your interests have been saved.", error: false });
+      flashBanner();
     } catch (error) {
       if (mounted.current && currentUid.current === owner) {
         setFeedback({
@@ -198,6 +221,7 @@ export default function SearchScreen() {
               : "Could not save. Please try again.",
           error: true,
         });
+        flashBanner();
       }
     } finally {
       saveLock.current = false;
@@ -205,27 +229,37 @@ export default function SearchScreen() {
     }
   }
 
-  function saveBar() {
+  // Floating save control pinned to the bottom-right corner. The status text
+  // sits in a small bubble above the button; taps elsewhere pass through.
+  function saveBar(bottomInset = 0) {
+    const blocked = busy || !dirty || tooFew;
     return (
-      <View style={styles.saveBar}>
-        {feedback && (
-          <Text
-            accessibilityRole={feedback.error ? "alert" : undefined}
-            accessibilityLiveRegion="polite"
-            style={styles.feedback}
-          >
-            {feedback.text}
-          </Text>
+      <View
+        pointerEvents="box-none"
+        style={[styles.saveFloat, { bottom: 20 + bottomInset }]}
+      >
+        {bannerShown && (
+          <View style={styles.saveBubble}>
+            {feedback && (
+              <Text
+                accessibilityRole={feedback.error ? "alert" : undefined}
+                accessibilityLiveRegion="polite"
+                style={styles.feedback}
+              >
+                {feedback.text}
+              </Text>
+            )}
+            <Text style={styles.saveHint} accessibilityLiveRegion="polite">
+              {loading && !user
+                ? "Loading your interests…"
+                : !user
+                  ? "Sign in to save interests to your profile."
+                  : tooFew
+                    ? `Choose at least ${MIN_INTERESTS} interests · ${selected.length} selected`
+                    : `${selected.length} ${selected.length === 1 ? "interest" : "interests"} selected${dirty ? " · Unsaved changes" : ""}`}
+            </Text>
+          </View>
         )}
-        <Text style={styles.saveHint} accessibilityLiveRegion="polite">
-          {loading && !user
-            ? "Loading your interests…"
-            : !user
-              ? "Sign in to save interests to your profile."
-              : tooFew
-                ? `Choose at least ${MIN_INTERESTS} interests · ${selected.length} selected`
-                : `${selected.length} ${selected.length === 1 ? "interest" : "interests"} selected${dirty ? " · Unsaved changes" : ""}`}
-        </Text>
         {!user && !loading ? (
           <Pressable
             accessibilityRole="button"
@@ -233,29 +267,43 @@ export default function SearchScreen() {
               setCategory(null);
               router.push("/(tabs)/profile");
             }}
-            style={styles.primaryButton}
+            style={({ pressed }) => [
+              styles.saveButton,
+              pressed && styles.pressed,
+            ]}
           >
-            <Text style={styles.primaryText}>Sign in to save</Text>
+            <Text style={styles.saveButtonText}>Sign in to save</Text>
           </Pressable>
         ) : (
           <Pressable
             accessibilityRole="button"
-            accessibilityState={{
-              disabled: busy || !dirty || tooFew,
-              busy: saving,
-            }}
-            disabled={busy || !dirty || tooFew}
+            accessibilityLabel={saving ? "Saving interests" : "Save interests"}
+            accessibilityState={{ disabled: blocked, busy: saving }}
+            disabled={blocked}
             onPress={() => void save()}
             style={({ pressed }) => [
-              styles.primaryButton,
-              (busy || !dirty || tooFew) && styles.disabled,
-              pressed && styles.pressed,
+              styles.saveButton,
+              styles.saveIconButton,
+              blocked && styles.saveButtonDisabled,
+              pressed && styles.saveButtonPressed,
             ]}
           >
-            {saving && <ActivityIndicator color={colors.background} />}
-            <Text style={styles.primaryText}>
-              {saving ? "Saving…" : "Save interests"}
-            </Text>
+            {blocked && !saving && (
+              <View pointerEvents="none" style={styles.saveButtonWash} />
+            )}
+            {saving ? (
+              <ActivityIndicator color={colors.background} />
+            ) : (
+              <SymbolView
+                name={{
+                  ios: "square.and.arrow.down",
+                  android: "save",
+                  web: "save",
+                }}
+                size={28}
+                tintColor={colors.background}
+              />
+            )}
           </Pressable>
         )}
       </View>
@@ -315,7 +363,10 @@ export default function SearchScreen() {
 
         <ScrollView
           style={styles.scroll}
-          contentContainerStyle={styles.content}
+          contentContainerStyle={[
+            styles.content,
+            section === "interests" && styles.floatSpace,
+          ]}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
         >
@@ -514,7 +565,7 @@ export default function SearchScreen() {
           </View>
           <ScrollView
             style={styles.scroll}
-            contentContainerStyle={styles.content}
+            contentContainerStyle={[styles.content, styles.floatSpace]}
           >
             {category?.activities.map((interest) => {
               const checked = selected.includes(interest);
@@ -544,7 +595,7 @@ export default function SearchScreen() {
               );
             })}
           </ScrollView>
-          {saveBar()}
+          {saveBar(insets.bottom)}
         </SafeAreaView>
       </Modal>
 
@@ -1092,18 +1143,88 @@ function createStyles(colors: AppColors) {
       lineHeight: 25,
       fontWeight: "700",
     },
-    saveBar: {
-      gap: 10,
-      padding: 16,
-      paddingHorizontal: 20,
-      borderTopWidth: 1,
-      borderTopColor: colors.border,
+    // Room at the end of a list so the floating save control never covers
+    // the last rows.
+    floatSpace: { paddingBottom: 160 },
+    saveFloat: {
+      position: "absolute",
+      right: 20,
+      left: 20,
+      alignItems: "flex-end",
+      gap: 8,
+    },
+    saveBubble: {
+      maxWidth: 280,
+      gap: 4,
+      paddingVertical: 8,
+      paddingHorizontal: 14,
+      borderRadius: 14,
+      borderWidth: 1,
+      borderColor: colors.border,
       backgroundColor: colors.surface,
     },
     saveHint: {
       color: colors.muted,
-      fontSize: 16,
-      lineHeight: 23,
+      fontSize: 14,
+      lineHeight: 20,
+      textAlign: "right",
+    },
+    saveButton: {
+      minHeight: 56,
+      minWidth: 112,
+      borderRadius: 28,
+      paddingVertical: 14,
+      paddingHorizontal: 24,
+      flexDirection: "row",
+      gap: 10,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: colors.accent,
+      // A deep, soft shadow lifts the button off the list behind it.
+      shadowColor: "#000",
+      shadowOffset: { width: 0, height: 8 },
+      shadowOpacity: 0.3,
+      shadowRadius: 14,
+      elevation: 10,
+    },
+    saveIconButton: {
+      width: 64,
+      height: 64,
+      minWidth: 64,
+      borderRadius: 32,
+      padding: 0,
+      paddingVertical: 0,
+      paddingHorizontal: 0,
+    },
+    // Inactive keeps the app green but paler, with a lighter shadow. The
+    // button itself stays solid so list rows do not show through; the wash
+    // below tints it toward the page colour.
+    saveButtonDisabled: {
+      shadowOpacity: 0.16,
+      elevation: 4,
+    },
+    saveButtonWash: {
+      position: "absolute",
+      top: 0,
+      right: 0,
+      bottom: 0,
+      left: 0,
+      borderRadius: 32,
+      backgroundColor: colors.background,
+      opacity: 0.5,
+    },
+    // Pressing sinks the button toward the surface.
+    saveButtonPressed: {
+      transform: [{ scale: 0.94 }],
+      shadowOffset: { width: 0, height: 3 },
+      shadowRadius: 6,
+      elevation: 4,
+    },
+    saveButtonText: {
+      color: colors.background,
+      fontSize: 18,
+      lineHeight: 26,
+      fontWeight: "700",
       textAlign: "center",
     },
     primaryButton: {
@@ -1125,9 +1246,10 @@ function createStyles(colors: AppColors) {
     },
     feedback: {
       color: colors.text,
-      fontSize: 17,
-      lineHeight: 25,
+      fontSize: 15,
+      lineHeight: 21,
       fontWeight: "600",
+      textAlign: "right",
     },
     disabled: { opacity: 0.55 },
     pressed: { opacity: 0.75 },

@@ -374,6 +374,7 @@ function installProfileRoutes(app, db, { toOwner, now = Date.now } = {}) {
                 COALESCE(${interestsSql}, ARRAY[]::text[]) AS interests
          FROM users u
          WHERE u.profile_visibility = 'public'
+           AND u.id <> $1::uuid
            AND ($2::uuid IS NULL OR u.id > $2::uuid)
          ORDER BY u.id
          LIMIT 25`,
