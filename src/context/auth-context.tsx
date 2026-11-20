@@ -30,13 +30,6 @@ import {
   type AuthFields,
 } from "../utils/auth-validation";
 
-export const INTEREST_OPTIONS = [
-  "Walking & outdoors",
-  "Learning & books",
-  "Volunteering",
-  "Music & culture",
-] as const;
-
 export type AppUser = {
   id: string;
   fullName: string;
@@ -55,15 +48,6 @@ export type AppUser = {
 export type ProfilePhotoChange =
   | { kind: "upload"; jpeg: string; requestId: string }
   | { kind: "remove" };
-
-// Retained for compatibility with older imports.
-// These values do not create or sign in a sample account.
-export const DEMO_USER_ID = "demo-margaret";
-
-export const DEMO_CREDENTIALS = {
-  email: "margaret@example.com",
-  password: "ReIdentify123",
-} as const;
 
 type AuthResult =
   | { ok: true }

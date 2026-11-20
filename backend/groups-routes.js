@@ -1428,35 +1428,9 @@ function installGroupRoutes(app, db, { clock = Date.now } = {}) {
   );
 }
 
-async function assertCanContact(db, uid, peer, transactionClient) {
-  if (
-    typeof uid !== "string" ||
-    !uid ||
-    uid.length > 128 ||
-    typeof peer !== "string" ||
-    !peer ||
-    peer.length > 128
-  )
-    fail(401, "Please sign in.");
-  const queryable = transactionClient || db;
-  const { rows } = await queryable.query(
-    `SELECT 1
-       FROM contact_blocks b
-       JOIN users owner ON owner.id = b.owner_id
-       JOIN users target ON target.id = b.target_id
-      WHERE (owner.firebase_uid = $1 AND target.firebase_uid = $2)
-         OR (owner.firebase_uid = $2 AND target.firebase_uid = $1)
-      LIMIT 1`,
-    [uid, peer],
-  );
-  if (rows.length)
-    fail(403, "Direct contact between these members is blocked.");
-}
-
 module.exports = {
   installGroupRoutes,
   startGroupCleanup,
   sweepInactiveGroups,
-  assertCanContact,
   purgeGroup,
 };
