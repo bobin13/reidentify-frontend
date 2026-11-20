@@ -34,6 +34,13 @@ not duplicate the catalogue, and the schema version is recorded in
 
 The migration does not drop old tables or columns.
 
+`db:migrate` applies every file in `backend/migrations/` in order (each is
+idempotent and records its own version). The backend refuses to start until
+all of them are recorded in `schema_migrations`:
+
+- `001_app_data_postgresql` — the schema described above.
+- `002_lookup_indexes` — indexes for the conversation list and "my groups".
+
 ## Existing Firestore data
 
 Applying the PostgreSQL schema does **not** copy existing Firestore documents.
