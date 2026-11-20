@@ -1,3 +1,4 @@
+const { transaction } = require("./postgres");
 const { createHash } = require("node:crypto");
 
 function installMessagingRoutes(app, db) {
@@ -34,21 +35,6 @@ function installMessagingRoutes(app, db) {
       fail(400, "Invalid conversation.");
     }
     return id;
-  }
-
-  async function withTransaction(fn) {
-    const client = await db.connect();
-    try {
-      await client.query("BEGIN");
-      const result = await fn(client);
-      await client.query("COMMIT");
-      return result;
-    } catch (error) {
-      await client.query("ROLLBACK").catch(() => {});
-      throw error;
-    } finally {
-      client.release();
-    }
   }
 
   async function getConversation(client, id, uid, lock = false) {
@@ -172,7 +158,7 @@ function installMessagingRoutes(app, db) {
         fail(400, "Choose another member.");
       }
 
-      const id = await withTransaction(async (client) => {
+      const id = await transaction(db, async (client) => {
         const peer = await client.query(
           "SELECT id FROM users WHERE firebase_uid = $1",
           [requestedPeerId],
@@ -305,7 +291,7 @@ function installMessagingRoutes(app, db) {
         fail(400, "Enter a message of up to 2,000 characters.");
       }
 
-      const message = await withTransaction(async (client) => {
+      const message = await transaction(db, async (client) => {
         const conversation = await getConversation(client, id, uid, true);
         const peerId =
           conversation.user_low === uid
@@ -378,7 +364,7 @@ function installMessagingRoutes(app, db) {
         fail(400, "Invalid read marker.");
       }
 
-      const read = await withTransaction(async (client) => {
+      const read = await transaction(db, async (client) => {
         const conversation = await getConversation(client, id, uid, true);
         if ((conversation.last_message_id || null) !== messageId) {
           return false;

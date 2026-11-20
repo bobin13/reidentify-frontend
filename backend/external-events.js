@@ -1,3 +1,4 @@
+const { transaction } = require("./postgres");
 const { createHash, randomUUID } = require("node:crypto");
 const { decodeHTML } = require("entities");
 const { mapCellFor } = require("./map-geography");
@@ -660,21 +661,6 @@ const iso = (value) =>
 const sourceMap = (row) =>
   new Map((row || []).map((source) => [source.id, source]));
 
-async function inTransaction(pool, operation) {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const result = await operation(client);
-    await client.query("COMMIT");
-    return result;
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
-}
-
 function sourceStatus(source, row, clock) {
   const active = row?.active_run_id;
   const lastSuccess = iso(row?.last_success_at);
@@ -736,7 +722,7 @@ function createExternalEventService(
   async function syncOne(source, force) {
     const owner = randomUUID(),
       startedAt = now();
-    const claimed = await inTransaction(pool, async (client) => {
+    const claimed = await transaction(pool, async (client) => {
       await client.query(
         `INSERT INTO external_event_sources (id, name, area)
          VALUES ($1, $2, $3)
@@ -863,7 +849,7 @@ function createExternalEventService(
         );
       }
 
-      const committed = await inTransaction(pool, async (client) => {
+      const committed = await transaction(pool, async (client) => {
         const { rows } = await client.query(
           "SELECT * FROM external_event_sources WHERE id = $1 FOR UPDATE",
           [source.id],
@@ -949,7 +935,7 @@ function createExternalEventService(
         return;
       }
       const hadSavedListings = Boolean(claimed.previous.active_run_id);
-      await inTransaction(pool, async (client) => {
+      await transaction(pool, async (client) => {
         await client.query(
           `UPDATE external_event_sources
               SET lease_owner = NULL, lease_until = NULL, last_error = $3,

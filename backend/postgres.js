@@ -51,11 +51,13 @@ function getPool() {
   return pool;
 }
 
-async function transaction(callback) {
-  const client = await getPool().connect();
+// Runs `work(client)` inside BEGIN/COMMIT on a client from `db` (a pg Pool,
+// or a test double with connect()). Rolls back and rethrows on any error.
+async function transaction(db, work) {
+  const client = await db.connect();
   try {
     await client.query("BEGIN");
-    const result = await callback(client);
+    const result = await work(client);
     await client.query("COMMIT");
     return result;
   } catch (error) {

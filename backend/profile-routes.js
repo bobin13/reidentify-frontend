@@ -1,3 +1,4 @@
+const { transaction } = require("./postgres");
 const express = require("express");
 const { createHash, randomUUID } = require("node:crypto");
 const { Buffer } = require("node:buffer");
@@ -527,10 +528,8 @@ function installProfileRoutes(app, db, { toOwner, now = Date.now } = {}) {
   );
 
   async function change(uid, operation, jpeg, remove, hash) {
-    const client = await db.connect();
     const version = remove ? null : operation;
-    try {
-      await client.query("BEGIN");
+    const profile = await transaction(db, async (client) => {
       const result = await client.query(
         `SELECT u.*, COALESCE(${interestsSql}, ARRAY[]::text[]) AS interests
          FROM users u
@@ -544,6 +543,7 @@ function installProfileRoutes(app, db, { toOwner, now = Date.now } = {}) {
         throw fail("Save your profile before uploading a photo.", 404);
       }
 
+      // A retried upload that already landed: confirm it is the same photo.
       if (!remove && row.photo_version === operation) {
         const photoResult = await client.query(
           `SELECT mime_type, content FROM profile_photos WHERE user_id = $1::uuid`,
@@ -556,11 +556,6 @@ function installProfileRoutes(app, db, { toOwner, now = Date.now } = {}) {
           createHash("sha256").update(savedPhoto.content).digest("hex") !== hash
         ) {
           throw fail("Choose the photo again before uploading it.", 409);
-        }
-
-        await client.query("COMMIT");
-        for (const key of cache.keys()) {
-          if (key.startsWith(uid + ":")) cache.delete(key);
         }
         return owner(row);
       }
@@ -588,24 +583,18 @@ function installProfileRoutes(app, db, { toOwner, now = Date.now } = {}) {
          RETURNING *`,
         [uid, version],
       );
-      await client.query("COMMIT");
-
-      for (const key of cache.keys()) {
-        if (key.startsWith(uid + ":")) cache.delete(key);
-      }
-      const updated = {
+      return owner({
         ...row,
         ...update.rows[0],
         photo_version: version,
-      };
-      return owner(updated);
-    } catch (error) {
-      await client.query("ROLLBACK").catch(() => {});
-      throw error;
-    } finally {
-      client.release();
-    }
+      });
+    });
 
+    // Committed: drop this member's cached photos.
+    for (const key of cache.keys()) {
+      if (key.startsWith(uid + ":")) cache.delete(key);
+    }
+    return profile;
   }
 
   const mutation = (remove) =>

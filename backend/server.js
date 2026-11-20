@@ -14,7 +14,12 @@ const { existsSync } = require("node:fs");
 const { initializeApp, applicationDefault } = require("firebase-admin/app");
 const { getAuth } = require("firebase-admin/auth");
 const { cities } = require("../shared/ontario-areas.json");
-const { closePool, ensureUser, getPool } = require("./postgres");
+const {
+  closePool,
+  ensureUser,
+  getPool,
+  transaction,
+} = require("./postgres");
 const { migrationVersions } = require("./migrate");
 const { createAuthSession } = require("./auth-session");
 const cityIndex = new Map(cities.map((city) => [city.id, city]));
@@ -106,6 +111,31 @@ function ownerProfile(account, data) {
   };
 }
 
+// The signed-in member's row plus interests, or null if there is no row.
+// `queryable` is the pool or a transaction client.
+async function readOwnerRow(queryable, userId) {
+  const result = await queryable.query(
+    `SELECT id, firebase_uid, full_name, email, area, city_id, city,
+            district_id, district, joined_at, about_me, gender,
+            age, profile_visibility, photo_version
+     FROM users WHERE id = $1`,
+    [userId],
+  );
+  if (!result.rowCount) return null;
+  const interests = await queryable.query(
+    `SELECT a.activity
+     FROM user_activities ua
+     JOIN activities a ON a.activity_id = ua.activity_id
+     WHERE ua.user_id = $1
+     ORDER BY a.groupid, a.activity`,
+    [userId],
+  );
+  return {
+    ...result.rows[0],
+    interests: interests.rows.map((row) => row.activity),
+  };
+}
+
 function createApp({ db, firebaseAuth }) {
   const app = express();
   const session = createAuthSession({ firebaseAuth, db, ensureUser });
@@ -183,30 +213,12 @@ function createApp({ db, firebaseAuth }) {
 
   // Read the signed-in user's profile.
   app.get("/api/me", async (req, res) => {
-    const result = await db.query(
-      `SELECT id, firebase_uid, full_name, email, area, city_id, city,
-              district_id, district, joined_at, about_me, gender,
-              age, profile_visibility, photo_version
-       FROM users WHERE id = $1`,
-      [req.userId],
-    );
-    if (!result.rowCount) {
+    const data = await readOwnerRow(db, req.userId);
+    if (!data) {
       return res.status(404).json({
         message: "Profile not found.",
       });
     }
-    const interests = await db.query(
-      `SELECT a.activity
-       FROM user_activities ua
-       JOIN activities a ON a.activity_id = ua.activity_id
-       WHERE ua.user_id = $1
-       ORDER BY a.groupid, a.activity`,
-      [req.userId],
-    );
-    const data = {
-      ...result.rows[0],
-      interests: interests.rows.map((row) => row.activity),
-    };
     res.json({
       user: ownerProfile(req.account, data),
     });
@@ -266,113 +278,91 @@ function createApp({ db, firebaseAuth }) {
     }
 
     // The ID comes from Firebase, never from the request body.
-    const user = await db.connect();
     let profile;
     try {
-      await user.query("BEGIN");
-      const previousResult = await user.query(
-        `SELECT id, area, city_id, city, district_id, district, joined_at,
-                about_me, age, gender, profile_visibility, photo_version
-         FROM users WHERE id = $1 FOR UPDATE`,
-        [req.userId],
-      );
-      const previous = previousResult.rows[0] || {};
-      // Older Search screens send only area/interests. Keep their saved location.
-      const location = changesLocation
-        ? requestedLocation
-        : resolveLocation({
-            cityId: previous.city_id,
-            districtId: previous.district_id,
-          }) || legacyLocation(previous.area || area);
-      const selectedInterests = [
-        ...new Set((interests ?? []).map((item) => item.trim())),
-      ];
-      const extras = profileChanges(input, {
-        aboutMe: previous.about_me,
-        age: previous.age,
-        gender: previous.gender,
-        profileVisibility: previous.profile_visibility,
-      });
-      const profileArea = location
-        ? locationArea(location)
-        : (area ?? previous.area ?? "").trim();
-
-      await user.query(
-        `UPDATE users
-         SET full_name = $2, area = $3, city_id = $4, city = $5,
-             district_id = $6, district = $7, about_me = $8, age = $9,
-             gender = $10, profile_visibility = $11, updated_at = now()
-         WHERE id = $1`,
-        [
-          req.userId,
-          fullName.trim(),
-          profileArea,
-          location?.cityId ?? null,
-          location?.city ?? null,
-          location?.districtId ?? null,
-          location?.district ?? null,
-          extras.aboutMe,
-          extras.age,
-          extras.gender,
-          extras.profileVisibility,
-        ],
-      );
-
-      if (interests !== undefined) {
-        const catalog = await user.query(
-          `SELECT DISTINCT ON (activity) activity_id, activity
-           FROM activities WHERE activity = ANY($1::text[])
-           ORDER BY activity, groupid`,
-          [selectedInterests],
+      profile = await transaction(db, async (user) => {
+        const previousResult = await user.query(
+          `SELECT id, area, city_id, city, district_id, district, joined_at,
+                  about_me, age, gender, profile_visibility, photo_version
+           FROM users WHERE id = $1 FOR UPDATE`,
+          [req.userId],
         );
-        if (catalog.rowCount !== selectedInterests.length) {
-          throw Object.assign(
-            new Error("Choose interests from the available list."),
-            { status: 400 },
-          );
-        }
-        await user.query("DELETE FROM user_activities WHERE user_id = $1", [
-          req.userId,
-        ]);
-        if (catalog.rowCount) {
-          await user.query(
-            `INSERT INTO user_activities (user_id, activity_id)
-             SELECT $1, selected.activity_id
-             FROM unnest($2::bigint[]) AS selected(activity_id)
-             ON CONFLICT DO NOTHING`,
-            [req.userId, catalog.rows.map((row) => row.activity_id)],
-          );
-        }
-      }
+        const previous = previousResult.rows[0] || {};
+        // Older Search screens send only area/interests. Keep their saved location.
+        const location = changesLocation
+          ? requestedLocation
+          : resolveLocation({
+              cityId: previous.city_id,
+              districtId: previous.district_id,
+            }) || legacyLocation(previous.area || area);
+        const selectedInterests = [
+          ...new Set((interests ?? []).map((item) => item.trim())),
+        ];
+        const extras = profileChanges(input, {
+          aboutMe: previous.about_me,
+          age: previous.age,
+          gender: previous.gender,
+          profileVisibility: previous.profile_visibility,
+        });
+        const profileArea = location
+          ? locationArea(location)
+          : (area ?? previous.area ?? "").trim();
 
-      const saved = await user.query(
-        `SELECT id, firebase_uid, full_name, email, area, city_id, city,
-                district_id, district, joined_at, about_me, gender,
-                age, profile_visibility, photo_version
-         FROM users WHERE id = $1`,
-        [req.userId],
-      );
-      const savedInterests = await user.query(
-        `SELECT a.activity
-         FROM user_activities ua
-         JOIN activities a ON a.activity_id = ua.activity_id
-         WHERE ua.user_id = $1
-         ORDER BY a.groupid, a.activity`,
-        [req.userId],
-      );
-      profile = ownerProfile(req.account, {
-        ...saved.rows[0],
-        interests: savedInterests.rows.map((row) => row.activity),
+        await user.query(
+          `UPDATE users
+           SET full_name = $2, area = $3, city_id = $4, city = $5,
+               district_id = $6, district = $7, about_me = $8, age = $9,
+               gender = $10, profile_visibility = $11, updated_at = now()
+           WHERE id = $1`,
+          [
+            req.userId,
+            fullName.trim(),
+            profileArea,
+            location?.cityId ?? null,
+            location?.city ?? null,
+            location?.districtId ?? null,
+            location?.district ?? null,
+            extras.aboutMe,
+            extras.age,
+            extras.gender,
+            extras.profileVisibility,
+          ],
+        );
+
+        if (interests !== undefined) {
+          const catalog = await user.query(
+            `SELECT DISTINCT ON (activity) activity_id, activity
+             FROM activities WHERE activity = ANY($1::text[])
+             ORDER BY activity, groupid`,
+            [selectedInterests],
+          );
+          if (catalog.rowCount !== selectedInterests.length) {
+            throw Object.assign(
+              new Error("Choose interests from the available list."),
+              { status: 400 },
+            );
+          }
+          await user.query("DELETE FROM user_activities WHERE user_id = $1", [
+            req.userId,
+          ]);
+          if (catalog.rowCount) {
+            await user.query(
+              `INSERT INTO user_activities (user_id, activity_id)
+               SELECT $1, selected.activity_id
+               FROM unnest($2::bigint[]) AS selected(activity_id)
+               ON CONFLICT DO NOTHING`,
+              [req.userId, catalog.rows.map((row) => row.activity_id)],
+            );
+          }
+        }
+
+        return ownerProfile(req.account, await readOwnerRow(user, req.userId));
       });
-      await user.query("COMMIT");
     } catch (error) {
-      await user.query("ROLLBACK").catch(() => {});
       if (error.status) {
         return res.status(error.status).json({ message: error.message });
       }
       throw error;
-    } finally {
-      user.release();
     }
 
     res.json({ user: profile });

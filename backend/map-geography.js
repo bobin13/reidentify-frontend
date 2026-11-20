@@ -1,3 +1,4 @@
+const { transaction } = require("./postgres");
 const { createHash, randomUUID } = require("node:crypto");
 
 const STEP = 0.05;
@@ -148,21 +149,6 @@ async function readMemberEvents(
     }
   }
   return events;
-}
-
-async function transaction(pool, operation) {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const result = await operation(client);
-    await client.query("COMMIT");
-    return result;
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
 }
 
 function groupMapIndex(pool, { now = Date.now, logger = console } = {}) {

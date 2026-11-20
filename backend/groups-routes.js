@@ -1,3 +1,4 @@
+const { transaction } = require("./postgres");
 const { createHash } = require("node:crypto");
 const { mapCellFor } = require("./map-geography");
 
@@ -128,23 +129,6 @@ const expiry = (activity, eventEnd = 0) =>
     Math.max(milliseconds(activity) || 0, eventEnd || 0) +
       INACTIVE_DAYS * DAY,
   );
-
-async function transaction(db, work) {
-  const client = await db.connect();
-  try {
-    await client.query("BEGIN");
-    const result = await work(client);
-    await client.query("COMMIT");
-    return result;
-  } catch (error) {
-    try {
-      await client.query("ROLLBACK");
-    } catch {}
-    throw error;
-  } finally {
-    client.release();
-  }
-}
 
 async function identity(client, req, message = "Your profile is not ready.") {
   if (!validUuid(req.userId) || typeof req.account?.uid !== "string")
