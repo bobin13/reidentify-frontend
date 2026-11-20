@@ -6,10 +6,15 @@ import {
 } from "react-native-safe-area-context";
 
 import { AuthProvider } from "../context/auth-context";
+import { ErrorScreen } from "../components/error-screen";
 import {
   ThemeProvider,
   useAppTheme,
 } from "../context/theme-context";
+
+// A screen that throws while rendering shows a retry screen instead of a
+// blank or red screen.
+export const ErrorBoundary = ErrorScreen;
 
 export default function RootLayout() {
   return (

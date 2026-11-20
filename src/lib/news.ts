@@ -1,5 +1,5 @@
 import type { User } from "firebase/auth";
-import { apiRequest } from "./api";
+import { API_URL, apiRequest } from "./api";
 
 export type NewsArticle = {
   id: string;
@@ -46,10 +46,6 @@ export type NewsResult = {
   notice: string | null;
   imageGroupingPending?: boolean;
 };
-
-const API_URL = (
-  process.env.EXPO_PUBLIC_API_URL || "http://localhost:3000"
-).replace(/\/$/, "");
 
 // News matched to the signed-in member's interests, ten stories per page.
 // The backend calls the news provider once per interest topic with a

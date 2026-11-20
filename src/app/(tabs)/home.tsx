@@ -543,8 +543,12 @@ export default function HomeScreen() {
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
-            refreshing={refreshing && !loading}
-            onRefresh={() => void loadNews()}
+            // For you shows its own loading state while it reloads, so the
+            // pull spinner only tracks the area feed.
+            refreshing={!forYou && refreshing && !loading}
+            onRefresh={() =>
+              void (forYou ? loadInterestNews(0) : loadNews())
+            }
             tintColor={colors.accent}
             colors={[colors.accent]}
           />

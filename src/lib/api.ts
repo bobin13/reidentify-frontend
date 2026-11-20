@@ -1,6 +1,6 @@
 import type { User } from "firebase/auth";
 
-const API_URL = (
+export const API_URL = (
   process.env.EXPO_PUBLIC_API_URL || "http://localhost:3000"
 ).replace(/\/$/, "");
 
@@ -39,12 +39,26 @@ export async function apiRequest<T>(
       signal: controller.signal,
     });
 
-    const data = await response.json();
+    // A proxy or crashed server can answer with an HTML error page. That is
+    // a server problem, not a connection problem, so report it as one.
+    const text = await response.text();
+    let data: unknown;
+    try {
+      data = text ? JSON.parse(text) : undefined;
+    } catch {
+      throw new ApiError(
+        response.ok
+          ? "ReIdentify sent an unexpected response. Please try again."
+          : `ReIdentify is having trouble right now (error ${response.status}). Please try again.`,
+        response.status,
+      );
+    }
 
     if (!response.ok) {
+      const message = (data as { message?: unknown } | undefined)?.message;
       throw new ApiError(
-        typeof data?.message === "string"
-          ? data.message
+        typeof message === "string"
+          ? message
           : "The server could not complete your request.",
         response.status,
       );
