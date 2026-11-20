@@ -17,6 +17,7 @@ import {
   regionForCluster,
   type MapSymbol,
 } from "../lib/map-clusters";
+import { useLatest } from "../lib/use-latest";
 
 export type Coordinates = { latitude: number; longitude: number };
 export type MapPoint = {
@@ -104,8 +105,7 @@ function EventMap({
     radiusKm,
     recenterKey,
   ].join("|");
-  const activeNativeKey = useRef(nativeKey);
-  activeNativeKey.current = nativeKey;
+  const activeNativeKey = useLatest(nativeKey);
   const visibleRegion = useRef(initial);
   const [renderRegion, setRenderRegion] = useState(initial);
   const [mapSize, setMapSize] = useState({ width: 390, height: 500 });

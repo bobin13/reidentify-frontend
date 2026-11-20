@@ -18,11 +18,12 @@ export default function VenueMap({
 }) {
   const map = useRef<MapView>(null),
     [ready, setReady] = useState(false);
-  const initial = useRef({
+  // The first region only; later moves animate from the effect below.
+  const [initial] = useState(() => ({
     ...center,
     latitudeDelta: 0.02,
     longitudeDelta: 0.02,
-  }).current;
+  }));
   useEffect(() => {
     if (ready)
       map.current?.animateToRegion(

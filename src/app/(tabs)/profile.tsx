@@ -61,6 +61,10 @@ import { useAppTheme } from "../../context/theme-context";
 import { auth } from "../../lib/firebase";
 import { apiRequest } from "../../lib/api";
 
+// A unique id per staged photo, so a retried upload is not applied twice.
+const photoRequestId = () =>
+  `photo-${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+
 type Page =
   | "overview"
   | "login"
@@ -82,11 +86,11 @@ const GENDER_OPTIONS = [
 type AvatarAsset = number | { uri: string };
 type AvatarPreview = AvatarAsset | string;
 
-const PROFILE_AVATARS: ReadonlyArray<{
+const PROFILE_AVATARS: readonly {
   id: string;
   label: string;
   source: AvatarAsset;
-}> = [
+}[] = [
   {
     id: "mint",
     label: "Silver hair on a mint background",
@@ -1370,8 +1374,7 @@ function EditProfile({
     setError("");
     setPhoto({
       ...selection,
-      requestId:
-        `photo-${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`,
+      requestId: photoRequestId(),
     });
   }
 

@@ -1,6 +1,7 @@
 const { XMLParser, XMLValidator } = require("fast-xml-parser");
 const { decodeHTML } = require("entities");
 const { createPhotoGrouper } = require("./news-photo-groups");
+const { createPageImageFinder } = require("./news-page-images");
 const { cities } = require("../shared/ontario-areas.json");
 const { feeds } = require("../shared/news-sources.json");
 
@@ -13,6 +14,14 @@ const parser = new XMLParser({
 });
 const MINUTE = 60 * 1000;
 const MAX_BYTES = 2 * 1024 * 1024;
+// Article pages are only fetched on the sites whose feeds we read.
+const PUBLISHER_HOSTS = [
+  ...new Set(
+    feeds
+      .filter((source) => source.enabled)
+      .map((source) => new URL(source.url).hostname.replace(/^www\./, "")),
+  ),
+];
 
 function normalize(value) {
   return String(value || "")
@@ -378,11 +387,19 @@ function createNewsService({
   now = Date.now,
   timeoutMs = 7000,
   photoBudgetMs = 2500,
+  pageImageBudgetMs = 1500,
 } = {}) {
   const photos = createPhotoGrouper({
     fetchImpl,
     now,
     budgetMs: photoBudgetMs,
+  });
+  const pageImages = createPageImageFinder({
+    fetchImpl,
+    now,
+    imageUrl,
+    publisherHosts: PUBLISHER_HOSTS,
+    budgetMs: pageImageBudgetMs,
   });
   const cache = new Map(),
     inflight = new Map();
@@ -491,7 +508,19 @@ function createNewsService({
         throw error;
       }
       const news = compileNews(city, district, results, now());
-      return { ...news, ...(await photos.group(news.articles)) };
+      const [grouped, pages] = await Promise.all([
+        photos.group(news.articles),
+        pageImages.fill(news.articles),
+      ]);
+      return {
+        ...news,
+        articles: grouped.articles.map((article, index) => ({
+          ...article,
+          previewImageUrl: pages.articles[index].previewImageUrl,
+        })),
+        // Either kind of photo work still running: the app asks again soon.
+        imageGroupingPending: grouped.imageGroupingPending || pages.pending,
+      };
     },
   };
 }

@@ -9,6 +9,8 @@ export type NewsArticle = {
   source: string;
   publishedAt: number;
   imageUrl: string | null;
+  // Photo the server found on the article page when the feed had none.
+  previewImageUrl?: string | null;
   imageGroupKey?: string | null;
   scope: "local" | "regional" | "ontario" | "interest";
   areaLabel: string;

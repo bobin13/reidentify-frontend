@@ -7,7 +7,6 @@ import {
   AppState,
   DeviceEventEmitter,
   Linking,
-  Image,
   Keyboard,
   KeyboardAvoidingView,
   Modal,
@@ -20,6 +19,7 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
+import { Image } from "expo-image";
 import { ModalSafeArea } from "../../components/modal-safe-area";
 import EventMap from "../../components/event-map";
 import type { AppColors } from "../../constants/app-colors";
@@ -60,6 +60,7 @@ import {
   type ViewVenue,
   type ViewPage,
 } from "../../lib/map-viewport";
+import { useLatest } from "../../lib/use-latest";
 
 const DEFAULT_AREA: AreaSelection = { cityId: "on-20002", districtId: null };
 
@@ -118,10 +119,14 @@ export default function MapScreen() {
     owner: profileKey,
     region: initialMapRegion(startingCoordinate, startingRadiusKm),
   }));
-  const region =
-    view.owner === profileKey
-      ? view.region
-      : initialMapRegion(startingCoordinate, startingRadiusKm);
+  // Memoized so React Compiler can treat it as read-only.
+  const region = useMemo(
+    () =>
+      view.owner === profileKey
+        ? view.region
+        : initialMapRegion(startingCoordinate, startingRadiusKm),
+    [view, profileKey, startingCoordinate, startingRadiusKm],
+  );
   const [useInterests, setUseInterests] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [locating, setLocating] = useState(false);
@@ -129,7 +134,7 @@ export default function MapScreen() {
   const [locationIssue, setLocationIssue] = useState("");
   const [showSettings, setShowSettings] = useState(false);
   const [reload, setReload] = useState(0);
-  const [clock, setClock] = useState(Date.now());
+  const [clock, setClock] = useState(() => Date.now());
   const [placesShown, setPlacesShown] = useState(8);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -643,7 +648,7 @@ export default function MapScreen() {
     }
   }
 
-  async function useCurrentLocation() {
+  async function goToCurrentLocation() {
     const requestId = ++locationRequest.current;
     const isCurrent = () =>
       mounted.current && requestId === locationRequest.current;
@@ -744,7 +749,7 @@ export default function MapScreen() {
             accessibilityLabel="Use my location"
             accessibilityState={{ disabled: locating, busy: locating }}
             disabled={locating}
-            onPress={() => void useCurrentLocation()}
+            onPress={() => void goToCurrentLocation()}
             style={[styles.locationButton, locating && styles.disabled]}
           >
             {locating ? (
@@ -1239,8 +1244,7 @@ function MapPlaceSearch({
     attribution: string;
   }>({ query: "", places: [], attribution: "" });
   const [retry, setRetry] = useState(0);
-  const bias = useRef(center);
-  bias.current = center;
+  const bias = useLatest(center);
   const query = text.trim().replace(/\s+/g, " ");
   const local = useMemo(
     () =>
@@ -1705,7 +1709,9 @@ function LazyVenueSchedule({
       ? saved
       : { events: [], total: 0, nextCursor: null },
   );
-  const [loading, setLoading] = useState(!saved || saved.expires <= Date.now());
+  const [loading, setLoading] = useState(
+    () => !saved || saved.expires <= Date.now(),
+  );
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
   const request = useRef<((cursor: string | null) => Promise<void>) | null>(
@@ -1812,7 +1818,8 @@ function LazyVenueSchedule({
         <Image
           source={{ uri: pictures[0] }}
           style={styles.eventPhoto}
-          resizeMode="cover"
+          contentFit="cover"
+          transition={150}
           accessibilityLabel={`Activity photo at ${venue.title}`}
           onError={() =>
             setFailedImages((old) =>

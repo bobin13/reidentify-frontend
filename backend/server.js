@@ -15,6 +15,8 @@ const { initializeApp, applicationDefault } = require("firebase-admin/app");
 const { getAuth } = require("firebase-admin/auth");
 const { cities } = require("../shared/ontario-areas.json");
 const { closePool, ensureUser, getPool } = require("./postgres");
+const { migrationVersions } = require("./migrate");
+const { createAuthSession } = require("./auth-session");
 const cityIndex = new Map(cities.map((city) => [city.id, city]));
 const { installPlaceRoutes } = require("./places-routes");
 const {
@@ -106,6 +108,7 @@ function ownerProfile(account, data) {
 
 function createApp({ db, firebaseAuth }) {
   const app = express();
+  const session = createAuthSession({ firebaseAuth, db, ensureUser });
 
   app.disable("x-powered-by");
   const json = express.json({ limit: "16kb" });
@@ -136,7 +139,7 @@ function createApp({ db, firebaseAuth }) {
     }
 
     try {
-      req.account = await firebaseAuth.verifyIdToken(match[1], true);
+      req.account = await session.verify(match[1]);
     } catch (error) {
       const invalidTokenCodes = [
         "auth/argument-error",
@@ -165,7 +168,7 @@ function createApp({ db, firebaseAuth }) {
     }
 
     try {
-      req.userId = await ensureUser(db, req.account);
+      req.userId = await session.userId(req.account);
       next();
     } catch (error) {
       console.error(
@@ -465,11 +468,12 @@ async function start() {
   if (!migrationTable.rows[0].name) {
     throw new Error("Run `npm run db:migrate --prefix backend` before starting.");
   }
-  const migration = await db.query(
-    "SELECT 1 FROM schema_migrations WHERE version = $1",
-    ["001_app_data_postgresql"],
+  const versions = migrationVersions();
+  const applied = await db.query(
+    "SELECT version FROM schema_migrations WHERE version = ANY($1::text[])",
+    [versions],
   );
-  if (!migration.rowCount) {
+  if (applied.rowCount !== versions.length) {
     throw new Error("Run `npm run db:migrate --prefix backend` before starting.");
   }
 

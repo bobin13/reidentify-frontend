@@ -3,7 +3,6 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useAppTheme } from "../context/theme-context";
 import type { CommunityGroup } from "../lib/groups";
 import { card, gutter, radius, shadow, type } from "../constants/theme";
-import { ChatText } from "./chat-display";
 export function useGroupStyles() {
   const { colors } = useAppTheme();
   const s = useMemo(

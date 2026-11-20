@@ -220,6 +220,39 @@ test("people route exposes Firebase UIDs and parameterizes the current user", as
   ]);
   assert.deepEqual(call.values, [viewerId]);
   assert.match(call.sql, /\$1::uuid/);
+  assert.match(call.sql, /contact_blocks/);
+});
+
+test("people search matches words in SQL and escapes LIKE wildcards", async () => {
+  const app = routeApp();
+  let call;
+  const db = {
+    async query(sql, values) {
+      call = { sql, values };
+      return {
+        rows: [
+          {
+            id: peerId,
+            firebase_uid: peerUid,
+            full_name: "José Member",
+            area: "Oakville",
+            interests: ["Cycling"],
+          },
+        ],
+      };
+    },
+  };
+  installProfileRoutes(app, db);
+
+  const response = await invoke(app.routes.get("GET /api/public-people"), {
+    query: { q: "  JOSÉ  100%_off " },
+  });
+
+  assert.deepEqual(call.values, [viewerId, null, ["jose", "100\\%\\_off"]]);
+  assert.match(call.sql, /NOT LIKE '%' \|\| w\.word \|\| '%'/);
+  assert.match(call.sql, /translate\(lower\(/);
+  assert.deepEqual(response.value.people.map((p) => p.id), [peerUid]);
+  assert.equal(response.value.nextCursor, null);
 });
 
 test("conversation summaries include the peer Firebase UID for their avatar", async () => {

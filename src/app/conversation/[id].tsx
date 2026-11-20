@@ -45,6 +45,7 @@ import {
   type Chat,
   type ChatMessage,
 } from "../../lib/messaging";
+import { useLatest } from "../../lib/use-latest";
 
 type ChatState = {
   owner: string;
@@ -83,11 +84,9 @@ export default function ConversationScreen() {
   const insets = useSafeAreaInsets();
 
   const [state, setState] = useState<ChatState>(empty);
-  const current = useRef(state);
-  current.current = state;
+  const current = useLatest(state);
 
-  const identity = useRef(key);
-  identity.current = key;
+  const identity = useLatest(key);
 
   const [draft, setDraft] = useState("");
   const [loadError, setLoadError] = useState("");

@@ -123,15 +123,22 @@ function installMessagingRoutes(app, db) {
     }));
   }
 
-  // Registered members available for starting a conversation.
+  // Members available for starting a conversation. Private members appear
+  // here by design (the profile screen says so); anyone on either side of a
+  // contact block is left out because a chat with them would be refused.
   app.get(
     "/api/people",
     route(async (req, res) => {
       const result = await db.query(
-        `SELECT id, firebase_uid, full_name, area
-         FROM users
-         WHERE id <> $1::uuid
-         ORDER BY firebase_uid
+        `SELECT u.id, u.firebase_uid, u.full_name, u.area
+         FROM users u
+         WHERE u.id <> $1::uuid
+           AND NOT EXISTS (
+             SELECT 1 FROM contact_blocks b
+             WHERE (b.owner_id = $1::uuid AND b.target_id = u.id)
+                OR (b.owner_id = u.id AND b.target_id = $1::uuid)
+           )
+         ORDER BY lower(u.full_name), u.id
          LIMIT 100`,
         [req.userId],
       );

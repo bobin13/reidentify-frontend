@@ -15,14 +15,6 @@ import {
   View,
 } from "react-native";
 import { ModalSafeArea } from "./modal-safe-area";
-type Coordinates = { latitude: number; longitude: number };
-type VenueSuggestion = {
-  id: string;
-  name: string;
-  address: string;
-  location: string;
-  coordinate: Coordinates;
-};
 import { useAuth } from "../context/auth-context";
 import {
   dateLabel,
@@ -34,6 +26,16 @@ import {
   type GroupEvent,
 } from "../lib/groups";
 import { GroupButton, useGroupStyles } from "./group-ui";
+import { useLatest } from "../lib/use-latest";
+
+type Coordinates = { latitude: number; longitude: number };
+type VenueSuggestion = {
+  id: string;
+  name: string;
+  address: string;
+  location: string;
+  coordinate: Coordinates;
+};
 
 export function GroupEvents({
   uid,
@@ -51,8 +53,7 @@ export function GroupEvents({
     [editing, setEditing] = useState<GroupEvent | "new" | null>(null);
   const [reload, setReload] = useState(0);
   const lock = useRef(false),
-    owner = useRef(`${uid}:${groupId}`);
-  owner.current = `${uid}:${groupId}`;
+    owner = useLatest(`${uid}:${groupId}`);
   const key = `${uid}:${groupId}`;
   useFocusEffect(
     useCallback(() => {
@@ -225,8 +226,10 @@ function EventForm({
   const { s, colors } = useGroupStyles();
   const { user } = useAuth();
   const savedCenter = user?.location?.coordinate;
-  const tomorrow = new Date(Date.now() + 86400000);
-  const originalDate = initial ? new Date(initial.startsAt) : tomorrow;
+  // Fixed at first render: the event being edited, or this time tomorrow.
+  const [originalDate] = useState(() =>
+    initial ? new Date(initial.startsAt) : new Date(Date.now() + 86400000),
+  );
   const [year, setYear] = useState(originalDate.getFullYear()),
     [month, setMonth] = useState(originalDate.getMonth()),
     [day, setDay] = useState(originalDate.getDate());

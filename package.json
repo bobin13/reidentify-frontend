@@ -5,7 +5,6 @@
   "dependencies": {
     "@expo/ui": "~57.0.22",
     "@react-native-async-storage/async-storage": "2.2.0",
-    "entities": "^8.1.0",
     "expo": "~57.0.27",
     "expo-constants": "~57.0.20",
     "expo-dev-client": "~57.0.19",
@@ -23,7 +22,6 @@
     "expo-symbols": "~57.0.3",
     "expo-system-ui": "~57.0.4",
     "expo-web-browser": "~57.0.3",
-    "fast-xml-parser": "^5.11.2",
     "firebase": "^13.0.0",
     "react": "19.2.3",
     "react-dom": "19.2.3",
@@ -38,6 +36,8 @@
   },
   "devDependencies": {
     "@types/react": "~19.2.2",
+    "eslint": "^9.39.5",
+    "eslint-config-expo": "~57.0.2",
     "typescript": "~6.0.3"
   },
   "scripts": {

@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { router, useFocusEffect } from "expo-router";
 import {
   ActivityIndicator,
-  AppState,
   Modal,
   Pressable,
   ScrollView,
@@ -21,6 +20,8 @@ import {
   type CommunityGroup,
 } from "../lib/groups";
 import { GroupButton, GroupCard, useGroupStyles } from "./group-ui";
+import { refreshInbox, useInbox } from "../lib/inbox";
+import { useLatest } from "../lib/use-latest";
 
 const openGroup = (id: string) =>
   router.push({ pathname: "/group/[id]", params: { id } });
@@ -29,58 +30,19 @@ export function GroupInbox() {
   const { user } = useAuth();
   const uid = user?.id || "";
   const { s, colors } = useGroupStyles();
-  const [result, setResult] = useState<{
-    owner: string;
-    groups: CommunityGroup[];
-  }>({ owner: "", groups: [] });
+  const inbox = useInbox(uid);
   const [query, setQuery] = useState(""),
     [unread, setUnread] = useState(false);
   const [showBlocked, setShowBlocked] = useState(false);
-  const [error, setError] = useState(""),
-    [loading, setLoading] = useState(false),
-    [reload, setReload] = useState(0);
+  // Groups come from the shared inbox, which the tab layout keeps polling.
+  // Opening this list asks for fresh numbers right away.
   useFocusEffect(
     useCallback(() => {
-      if (!uid) return;
-      let active = true,
-        busy = false;
-      async function refresh() {
-        if (
-          !active ||
-          busy ||
-          (AppState.currentState && AppState.currentState !== "active")
-        )
-          return;
-        busy = true;
-        try {
-          const data = await groupRequest<{ groups: CommunityGroup[] }>(
-            uid,
-            "/api/groups/mine",
-          );
-          if (active) {
-            setResult({ owner: uid, groups: data.groups });
-            setError("");
-          }
-        } catch (e) {
-          if (active) setError(groupError(e));
-        } finally {
-          busy = false;
-          if (active) setLoading(false);
-        }
-      }
-      setLoading(true);
-      void refresh();
-      const timer = setInterval(() => void refresh(), 10000);
-      const listener = AppState.addEventListener("change", (v) => {
-        if (v === "active") void refresh();
-      });
-      return () => {
-        active = false;
-        clearInterval(timer);
-        listener.remove();
-      };
-    }, [uid, reload]),
+      if (uid) void refreshInbox(uid, true);
+    }, [uid]),
   );
+  const error = inbox.groupsError;
+  const loading = !!uid && inbox.groups === null && !error;
   if (!user)
     return (
       <View style={s.content}>
@@ -91,7 +53,7 @@ export function GroupInbox() {
         />
       </View>
     );
-  const groups = (result.owner === uid ? result.groups : []).filter(
+  const groups = (inbox.groups ?? []).filter(
     (g) =>
       (!unread || g.unreadCount > 0) &&
       `${g.name} ${g.area} ${g.preview}`
@@ -146,7 +108,7 @@ export function GroupInbox() {
           </Text>
           <GroupButton
             label="Try again"
-            onPress={() => setReload((v) => v + 1)}
+            onPress={() => void refreshInbox(uid, true)}
             secondary
           />
         </>
@@ -281,8 +243,7 @@ export function GroupDirectory({ search }: { search: string }) {
   }>({ key: "", groups: [], cursor: null });
   const matchInterests = interestsOnly && !!user?.interests.length;
   const key = JSON.stringify([uid, search, matchInterests, user?.interests]);
-  const identity = useRef(key);
-  identity.current = key;
+  const identity = useLatest(key);
   const paging = useRef(false);
   const tagQuery = matchInterests ? user!.interests.join("|") : "";
   const url = `/api/groups?search=${encodeURIComponent(search)}${

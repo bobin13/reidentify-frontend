@@ -61,10 +61,56 @@ function preference(key: string) {
 const notify = (value: Preference) =>
   value.listeners.forEach((listener) => listener());
 
+// Reads the saved choice once per account. Kept outside the hook because it
+// mutates the shared store, which React Compiler does not allow in a hook.
+function loadPreference(key: string) {
+  const value = preference(key);
+  if (value.loaded) return;
+
+  value.loaded = true;
+  const revision = value.revision;
+
+  void AsyncStorage.getItem(key)
+    .then((saved) => {
+      if (value.revision !== revision) return;
+
+      value.enabled = saved !== "off";
+      notify(value);
+    })
+    .catch(() => {
+      // Keep filtering enabled if storage is unavailable.
+    });
+}
+
+async function savePreference(key: string, next: boolean) {
+  const value = preference(key);
+  const previous = value.enabled;
+  const revision = ++value.revision;
+
+  value.enabled = next;
+  notify(value);
+
+  const write = value.writing
+    .catch(() => undefined)
+    .then(() => AsyncStorage.setItem(key, next ? "on" : "off"));
+
+  value.writing = write;
+
+  try {
+    await write;
+  } catch (error) {
+    if (value.revision === revision) {
+      value.enabled = previous;
+      notify(value);
+    }
+
+    throw error;
+  }
+}
+
 export function useChatFilter() {
   const { user } = useAuth();
   const key = `reidentify:hide-swear-words:${user?.id || "guest"}`;
-  const value = preference(key);
 
   const subscribe = useCallback(
     (listener: () => void) => {
@@ -89,50 +135,9 @@ export function useChatFilter() {
     () => true,
   );
 
-  useEffect(() => {
-    if (value.loaded) return;
+  useEffect(() => loadPreference(key), [key]);
 
-    value.loaded = true;
-    const revision = value.revision;
-
-    void AsyncStorage.getItem(key)
-      .then((saved) => {
-        if (value.revision !== revision) return;
-
-        value.enabled = saved !== "off";
-        notify(value);
-      })
-      .catch(() => {
-        // Keep filtering enabled if storage is unavailable.
-      });
-  }, [key, value]);
-
-  async function setEnabled(next: boolean) {
-    const previous = value.enabled;
-    const revision = ++value.revision;
-
-    value.enabled = next;
-    notify(value);
-
-    const write = value.writing
-      .catch(() => undefined)
-      .then(() =>
-        AsyncStorage.setItem(key, next ? "on" : "off"),
-      );
-
-    value.writing = write;
-
-    try {
-      await write;
-    } catch (error) {
-      if (value.revision === revision) {
-        value.enabled = previous;
-        notify(value);
-      }
-
-      throw error;
-    }
-  }
+  const setEnabled = (next: boolean) => savePreference(key, next);
 
   return { enabled, setEnabled };
 }

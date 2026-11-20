@@ -1,12 +1,10 @@
-import { useEffect, useState } from "react";
 import { Tabs } from "expo-router";
 import { SymbolView } from "expo-symbols";
-import { AppState, StyleSheet, View } from "react-native";
+import { StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "../../context/auth-context";
 import { useAppTheme } from "../../context/theme-context";
-import { groupRequest, type CommunityGroup } from "../../lib/groups";
-import { getChats } from "../../lib/messaging";
+import { useInbox, useInboxPolling } from "../../lib/inbox";
 import {
   InterestsOnboarding,
   needsInterestOnboarding,
@@ -17,59 +15,13 @@ export default function TabLayout() {
   const { user } = useAuth();
   const uid = user?.id || "";
   const insets = useSafeAreaInsets();
-  const [unread, setUnread] = useState({ owner: "", value: false });
-  const hasUnread = unread.owner === uid && unread.value;
-
-  useEffect(() => {
-    if (!uid) return;
-
-    let active = true;
-    let busy = false;
-
-    async function refreshUnread() {
-      if (
-        !active ||
-        busy ||
-        (AppState.currentState && AppState.currentState !== "active")
-      ) {
-        return;
-      }
-
-      busy = true;
-      try {
-        const [chats, groups] = await Promise.all([
-          getChats(uid),
-          groupRequest<{ groups: CommunityGroup[] }>(uid, "/api/groups/mine"),
-        ]);
-        if (active) {
-          setUnread({
-            owner: uid,
-            value:
-              chats.conversations.some((chat) => chat.unreadCount > 0) ||
-              groups.groups.some((group) => group.unreadCount > 0),
-          });
-        }
-      } catch (error) {
-        if (active) {
-          console.warn("Unable to refresh unread message indicator.", error);
-        }
-      } finally {
-        busy = false;
-      }
-    }
-
-    void refreshUnread();
-    const timer = setInterval(() => void refreshUnread(), 10000);
-    const subscription = AppState.addEventListener("change", (state) => {
-      if (state === "active") void refreshUnread();
-    });
-
-    return () => {
-      active = false;
-      clearInterval(timer);
-      subscription.remove();
-    };
-  }, [uid]);
+  // The only poller for chats and groups; Messages reads the same data.
+  useInboxPolling(uid);
+  const inbox = useInbox(uid);
+  const hasUnread =
+    !!uid &&
+    (!!inbox.chats?.some((chat) => chat.unreadCount > 0) ||
+      !!inbox.groups?.some((group) => group.unreadCount > 0));
 
   // New accounts choose their first interests before seeing the tabs.
   if (needsInterestOnboarding(user)) {

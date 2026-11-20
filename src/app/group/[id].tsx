@@ -55,6 +55,7 @@ import {
   type GroupMessage,
   type GroupMessagePage,
 } from "../../lib/groups";
+import { useLatest } from "../../lib/use-latest";
 
 type State = {
   key: string;
@@ -131,11 +132,9 @@ export default function GroupScreen() {
 
   const [state, setState] = useState<State>(empty);
 
-  const current = useRef(state);
-  current.current = state;
+  const current = useLatest(state);
 
-  const identity = useRef(key);
-  identity.current = key;
+  const identity = useLatest(key);
 
   const alive = useRef(true);
   const actionLock = useRef(false);
@@ -886,7 +885,7 @@ export default function GroupScreen() {
                 ListEmptyComponent={
                   <Text style={s.muted}>
                     Say hello to your group. Hidden
-                    members' messages will not appear
+                    members&apos; messages will not appear
                     here.
                   </Text>
                 }
@@ -1166,7 +1165,7 @@ export default function GroupScreen() {
                 )}
 
                 <Text style={s.muted}>
-                  Muting suppresses this group's unread
+                  Muting suppresses this group&apos;s unread
                   alerts. You remain a member and can
                   read its messages.
                 </Text>

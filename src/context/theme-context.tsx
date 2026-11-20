@@ -1,4 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as SplashScreen from "expo-splash-screen";
 import {
   createContext,
   ReactNode,
@@ -27,33 +28,43 @@ const ThemeContext = createContext<ThemeContextType | undefined>(
 
 const THEME_KEY = "reidentify-theme";
 
+void SplashScreen.preventAutoHideAsync().catch(() => {});
+
 export function ThemeProvider({
   children,
 }: {
   children: ReactNode;
 }) {
   const [theme, setTheme] = useState<ThemeMode>("dark");
+  const [ready, setReady] = useState(false);
 
+  // Keep the splash screen up until the saved theme is known, so members
+  // who chose light mode do not see the dark theme flash first.
   useEffect(() => {
-    loadTheme();
+    let active = true;
+    AsyncStorage.getItem(THEME_KEY)
+      .then((saved) => {
+        if (active && (saved === "light" || saved === "dark")) setTheme(saved);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (active) setReady(true);
+        SplashScreen.hide();
+      });
+    return () => {
+      active = false;
+    };
   }, []);
 
-  async function loadTheme() {
-    const savedTheme = await AsyncStorage.getItem(THEME_KEY);
-
-    if (savedTheme === "light" || savedTheme === "dark") {
-      setTheme(savedTheme);
-    }
-  }
-
-  async function toggleTheme() {
+  function toggleTheme() {
     const newTheme = theme === "dark" ? "light" : "dark";
-
     setTheme(newTheme);
-    await AsyncStorage.setItem(THEME_KEY, newTheme);
+    void AsyncStorage.setItem(THEME_KEY, newTheme).catch(() => {});
   }
 
   const colors = theme === "dark" ? darkColors : lightColors;
+
+  if (!ready) return null;
 
   return (
     <ThemeContext.Provider

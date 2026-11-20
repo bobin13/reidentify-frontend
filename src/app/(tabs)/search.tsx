@@ -32,6 +32,7 @@ import { useAuth } from "../../context/auth-context";
 import { useAppTheme } from "../../context/theme-context";
 import { ApiError, apiRequest } from "../../lib/api";
 import { auth } from "../../lib/firebase";
+import { useLatest } from "../../lib/use-latest";
 
 type Section = "interests" | "groups" | "people";
 type Person = {
@@ -116,8 +117,7 @@ export default function SearchScreen() {
   const saveLock = useRef(false);
   const mounted = useRef(true);
   const uid = user?.id ?? "";
-  const currentUid = useRef(uid);
-  currentUid.current = uid;
+  const currentUid = useLatest(uid);
 
   const saved = user?.interests ?? [];
   const selected =

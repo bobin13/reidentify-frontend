@@ -50,3 +50,9 @@ backend/.env.*
 **/firebase-service-account.json
 **/*service-account*.json
 credentials/credentials.json
+# editor and tool output
+.idea/
+backend/.tsupgrader/
+
+# device debug dumps (ANR traces, bug reports)
+*-anr.txt

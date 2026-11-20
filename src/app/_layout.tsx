@@ -1,4 +1,5 @@
 import { Stack } from "expo-router";
+import { StatusBar } from "expo-status-bar";
 import {
   SafeAreaProvider,
   SafeAreaView,
@@ -23,7 +24,7 @@ export default function RootLayout() {
 }
 
 function ThemedRootLayout() {
-  const { colors } = useAppTheme();
+  const { colors, theme } = useAppTheme();
 
   return (
     <SafeAreaView
@@ -33,6 +34,8 @@ function ThemedRootLayout() {
         backgroundColor: colors.background,
       }}
     >
+      {/* Explicit, because app.json pins the native style to dark. */}
+      <StatusBar style={theme === "dark" ? "light" : "dark"} />
       <Stack
         screenOptions={{
           headerShown: false,

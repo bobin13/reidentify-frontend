@@ -23,6 +23,15 @@ const normalizeSearch = (text) =>
     .trim()
     .replace(/\s+/g, " ");
 
+// SQL twin of normalizeSearch for common accented Latin letters, so
+// "jose" finds "José". The plain letters come from normalizeSearch itself.
+const ACCENTED = [
+  ..."àáâãäåāăąçćčďèéêëēėęěìíîïīįñńňòóôõöōőùúûüūůűųýÿžźżšśşťţ",
+].filter((letter) => normalizeSearch(letter).length === 1);
+const PLAIN = ACCENTED.map(normalizeSearch).join("");
+const foldSql = (expression) =>
+  `translate(lower(${expression}), '${ACCENTED.join("")}', '${PLAIN}')`;
+
 const safeInterests = (data) =>
   Array.isArray(data.interests)
     ? data.interests
@@ -369,18 +378,34 @@ function installProfileRoutes(app, db, { toOwner, now = Date.now } = {}) {
       searchTotal.count++;
       searches.set(req.account.uid, allowance);
 
+      // Match in the query so every page of 25 holds real matches. Each word
+      // must appear in the folded name, area or interests.
+      const words = queryText
+        .split(" ")
+        .filter(Boolean)
+        .map((word) => word.replace(/[\\%_]/g, "\\$&"));
       const found = await db.query(
-        `SELECT u.id, u.firebase_uid, u.full_name, u.area,
-                COALESCE(${interestsSql}, ARRAY[]::text[]) AS interests
+        `SELECT u.id, u.firebase_uid, u.full_name, u.area, i.interests
          FROM users u
+         CROSS JOIN LATERAL (
+           SELECT COALESCE(${interestsSql}, ARRAY[]::text[]) AS interests
+         ) i
+         CROSS JOIN LATERAL (
+           SELECT ${foldSql(
+             "concat_ws(' ', u.full_name, u.area, array_to_string(i.interests, ' '))",
+           )} AS haystack
+         ) s
          WHERE u.profile_visibility = 'public'
            AND u.id <> $1::uuid
            AND ($2::uuid IS NULL OR u.id > $2::uuid)
+           AND NOT EXISTS (
+             SELECT 1 FROM unnest($3::text[]) AS w(word)
+             WHERE s.haystack NOT LIKE '%' || w.word || '%'
+           )
          ORDER BY u.id
          LIMIT 25`,
-        [req.userId, after || null],
+        [req.userId, after || null, words],
       );
-      const words = queryText.split(" ").filter(Boolean);
       const people = [];
 
       for (const row of found.rows) {
@@ -392,16 +417,6 @@ function installProfileRoutes(app, db, { toOwner, now = Date.now } = {}) {
         ) {
           continue;
         }
-
-        const text = normalizeSearch(
-          [
-            row.full_name,
-            typeof row.area === "string" ? row.area : "",
-            ...interests,
-          ].join(" "),
-        );
-
-        if (!words.every((word) => text.includes(word))) continue;
 
         people.push({
           id: row.firebase_uid,

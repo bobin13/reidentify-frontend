@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import {
   ActivityIndicator,
-  AppState,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -20,15 +19,15 @@ import { card, gutter, radius, type } from "../../constants/theme";
 import { useAuth } from "../../context/auth-context";
 import { useAppTheme } from "../../context/theme-context";
 import { auth } from "../../lib/firebase";
+import { refreshInbox, useInbox } from "../../lib/inbox";
 import {
-  getChats,
   getMembers,
   messageError,
   startChat,
   timeLabel,
-  type Chat,
   type Member,
 } from "../../lib/messaging";
+import { useLatest } from "../../lib/use-latest";
 
 export default function MessagesScreen() {
   const params = useLocalSearchParams<{ section?: string }>();
@@ -74,90 +73,48 @@ function DirectMessagesScreen() {
   const [query, setQuery] = useState("");
   const [unreadOnly, setUnreadOnly] = useState(false);
 
-  const [result, setResult] = useState<{
+  const inbox = useInbox(uid);
+  const [members, setMembers] = useState<{
     owner: string;
-    chats: Chat[];
     people: Member[];
-  }>({
-    owner: "",
-    chats: [],
-    people: [],
-  });
+  }>({ owner: "", people: [] });
+  const [membersLoading, setMembersLoading] = useState(false);
 
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [opening, setOpening] = useState("");
 
   const pending = useRef(false);
-  const identity = useRef(uid);
-  identity.current = uid;
+  const identity = useLatest(uid);
 
+  // Chats come from the shared inbox, which the tab layout keeps polling.
+  // Opening this screen asks for fresh numbers right away.
   useFocusEffect(
     useCallback(() => {
-      if (!uid) return;
-
-      let active = true;
-      let busy = false;
-
       setError("");
-      setLoading(true);
+      if (uid && !peopleMode) void refreshInbox(uid, true);
+    }, [uid, peopleMode]),
+  );
 
-      async function refresh() {
-        if (
-          !active ||
-          busy ||
-          (AppState.currentState && AppState.currentState !== "active")
-        ) {
-          return;
-        }
-
-        busy = true;
-
-        try {
-          if (peopleMode) {
-            const data = await getMembers(uid);
-
-            if (active && auth.currentUser?.uid === uid) {
-              setResult((old) => ({
-                owner: uid,
-                chats: old.owner === uid ? old.chats : [],
-                people: data.people,
-              }));
-            }
-          } else {
-            const data = await getChats(uid);
-
-            if (active && auth.currentUser?.uid === uid) {
-              setResult((old) => ({
-                owner: uid,
-                chats: data.conversations,
-                people: old.owner === uid ? old.people : [],
-              }));
-            }
-          }
-
+  // The member list rarely changes, so it loads once per visit.
+  useFocusEffect(
+    useCallback(() => {
+      if (!uid || !peopleMode) return;
+      let active = true;
+      setMembersLoading(true);
+      getMembers(uid)
+        .then((data) => {
           if (active && auth.currentUser?.uid === uid) {
-            setError("");
+            setMembers({ owner: uid, people: data.people });
           }
-        } catch (failure) {
+        })
+        .catch((failure) => {
           if (active) setError(messageError(failure));
-        } finally {
-          if (active) setLoading(false);
-          busy = false;
-        }
-      }
-
-      void refresh();
-
-      const timer = setInterval(() => void refresh(), 10000);
-      const subscription = AppState.addEventListener("change", (state) => {
-        if (state === "active") void refresh();
-      });
-
+        })
+        .finally(() => {
+          if (active) setMembersLoading(false);
+        });
       return () => {
         active = false;
-        clearInterval(timer);
-        subscription.remove();
       };
     }, [uid, peopleMode]),
   );
@@ -188,8 +145,12 @@ function DirectMessagesScreen() {
     }
   }
 
-  const chats = result.owner === uid ? result.chats : [];
-  const people = result.owner === uid ? result.people : [];
+  const chats = inbox.chats ?? [];
+  const people = members.owner === uid ? members.people : [];
+  const loading = peopleMode
+    ? membersLoading
+    : !!uid && inbox.chats === null && !inbox.chatsError;
+  const shownError = error || (peopleMode ? "" : inbox.chatsError);
   const search = query.trim().toLowerCase();
 
   const filteredChats = chats.filter(
@@ -299,9 +260,9 @@ function DirectMessagesScreen() {
 
       {loading && <ActivityIndicator color={colors.accent} />}
 
-      {!!error && (
+      {!!shownError && (
         <Text accessibilityRole="alert" style={styles.body}>
-          {error}
+          {shownError}
         </Text>
       )}
 
@@ -339,7 +300,7 @@ function DirectMessagesScreen() {
           ))}
 
       {!loading &&
-        !error &&
+        !shownError &&
         (peopleMode
           ? filteredPeople.length === 0
           : filteredChats.length === 0) && (

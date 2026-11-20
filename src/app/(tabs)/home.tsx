@@ -10,7 +10,6 @@ import { SymbolView } from "expo-symbols";
 import {
   ActivityIndicator,
   Alert,
-  Image,
   Linking,
   Modal,
   Pressable,
@@ -20,6 +19,7 @@ import {
   Text,
   View,
 } from "react-native";
+import { Image } from "expo-image";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import type { AppColors } from "../../constants/app-colors";
@@ -31,7 +31,6 @@ import {
   selectionForProfile,
 } from "../../lib/locations";
 import {
-  articlePreviewImage,
   newsImageIdentity,
 } from "../../lib/news-images";
 import {
@@ -114,13 +113,16 @@ function NewsPhoto({
   if (!uri || failed) return null;
 
   return (
+    // expo-image keeps news photos in a disk cache across launches.
     <Image
       source={{ uri }}
       style={{
         width: "100%",
         aspectRatio: 16 / 9,
       }}
-      resizeMode="cover"
+      contentFit="cover"
+      transition={150}
+      recyclingKey={uri}
       accessible={false}
       onError={() => setFailed(true)}
     />
@@ -163,10 +165,6 @@ export default function HomeScreen() {
 
   const [notificationsOpen, setNotificationsOpen] =
     useState(false);
-
-  const [previewImages, setPreviewImages] = useState<
-    Record<string, string | null>
-  >({});
 
   const request = useRef<AbortController | null>(null);
 
@@ -433,7 +431,7 @@ export default function HomeScreen() {
       const candidate = article.hidePhoto
         ? null
         : article.imageUrl ||
-          previewImages[article.url] ||
+          article.previewImageUrl ||
           null;
 
       const key =
@@ -452,7 +450,7 @@ export default function HomeScreen() {
     }
 
     return photos;
-  }, [matches, previewImages]);
+  }, [matches]);
 
   const visibleArticles = useMemo(
     () => (filter === "foryou" ? matches : matches.slice(0, visibleCount)),
@@ -481,53 +479,6 @@ export default function HomeScreen() {
     refreshing,
     result?.imageGroupingPending,
     loadNews,
-  ]);
-
-  useEffect(() => {
-    if (!focused || loading) return;
-
-    const controller = new AbortController();
-
-    const targets = visibleArticles
-      .filter((article) => !article.imageUrl)
-      .slice(0, 8);
-
-    let cursor = 0;
-
-    async function worker() {
-      while (!controller.signal.aborted) {
-        const article = targets[cursor++];
-
-        if (!article) break;
-
-        const image = await articlePreviewImage(
-          article.url,
-          controller.signal,
-        );
-
-        if (!controller.signal.aborted) {
-          setPreviewImages((old) =>
-            old[article.url] === image
-              ? old
-              : {
-                  ...old,
-                  [article.url]: image,
-                },
-          );
-        }
-      }
-    }
-
-    void Promise.all([
-      worker(),
-      worker(),
-    ]);
-
-    return () => controller.abort();
-  }, [
-    focused,
-    loading,
-    visibleArticles,
   ]);
 
   const now = new Date();
@@ -661,7 +612,7 @@ export default function HomeScreen() {
           {cityName &&
             result?.coverage === "ontario-only" && (
               <Text style={styles.newsDescription}>
-                Updates for your area aren't available
+                Updates for your area aren&apos;t available
                 right now. Here is the latest Ontario
                 news.
               </Text>
