@@ -94,3 +94,16 @@ test("the user row lookup is cached briefly and re-run when the email changes", 
   await t.session.userId({ uid: "alice", email: "new@x.com" });
   assert.equal(t.ensureCalls.length, 3, "cache expires");
 });
+
+test("forget drops a deleted account's cached checks", async () => {
+  const t = setup();
+  await t.session.verify("dave:d@x.com");
+  await t.session.userId({ uid: "dave", email: "d@x.com" });
+  t.session.forget("dave");
+  t.revoked.add("dave");
+  await assert.rejects(t.session.verify("dave:d@x.com"), {
+    code: "auth/id-token-revoked",
+  });
+  await t.session.userId({ uid: "dave", email: "d@x.com" });
+  assert.equal(t.ensureCalls.length, 2, "user row looked up again");
+});

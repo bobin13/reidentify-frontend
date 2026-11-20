@@ -125,6 +125,7 @@ export default function ProfileScreen() {
   const {
     user,
     signOut,
+    deleteAccount,
     loading,
     authError,
     refreshProfile,
@@ -542,6 +543,40 @@ export default function ProfileScreen() {
             >
               <Text style={styles.signOutText}>
                 Sign out
+              </Text>
+            </Pressable>
+
+            <Pressable
+              accessibilityRole="button"
+              accessibilityHint="Permanently deletes your account after you confirm"
+              onPress={() =>
+                Alert.alert(
+                  "Delete your account?",
+                  "This permanently deletes your profile, photo, interests, chats and group memberships. Groups you were the last member of will close. This cannot be undone.",
+                  [
+                    { text: "Cancel", style: "cancel" },
+                    {
+                      text: "Delete account",
+                      style: "destructive",
+                      onPress: async () => {
+                        const result = await deleteAccount();
+                        if (result.ok) {
+                          setPage("overview");
+                        } else {
+                          Alert.alert("Delete account", result.message);
+                        }
+                      },
+                    },
+                  ],
+                )
+              }
+              style={({ pressed }) => [
+                styles.deleteAccountButton,
+                pressed && styles.pressed,
+              ]}
+            >
+              <Text style={styles.deleteAccountText}>
+                Delete account
               </Text>
             </Pressable>
           </View>
@@ -2430,6 +2465,17 @@ function createStyles(colors: AppColors) {
       paddingVertical: 10,
     },
     signOutText: { ...type.label, color: colors.danger },
+    deleteAccountButton: {
+      minHeight: 44,
+      justifyContent: "center",
+      alignItems: "center",
+      marginTop: 6,
+    },
+    deleteAccountText: {
+      ...type.caption,
+      color: colors.muted,
+      textDecorationLine: "underline",
+    },
     accountFooter: { paddingTop: 2 },
     backButton: {
       minHeight: 44,

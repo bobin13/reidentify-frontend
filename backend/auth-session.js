@@ -49,7 +49,16 @@ function createAuthSession({
     return id;
   }
 
-  return { verify, userId };
+  // After an account is deleted: the next request with its still-unexpired
+  // token re-checks with Firebase (and is refused) instead of using a cache.
+  function forget(uid) {
+    revokeCheckedAt.delete(uid);
+    for (const key of userIds.keys()) {
+      if (key.startsWith(`${uid}\n`)) userIds.delete(key);
+    }
+  }
+
+  return { verify, userId, forget };
 }
 
 module.exports = { createAuthSession };

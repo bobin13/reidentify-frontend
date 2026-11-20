@@ -130,6 +130,60 @@ const expiry = (activity, eventEnd = 0) =>
       INACTIVE_DAYS * DAY,
   );
 
+// Removes one member from a group the caller has locked. The last member
+// leaving cancels upcoming events and closes the group for later cleanup.
+async function leaveGroupTx(client, group, userId, at) {
+  const last = group.memberCount === 1;
+  if (last) {
+    await client.query(
+      `UPDATE group_events SET status = 'cancelled', updated_at = $2
+        WHERE group_id = $1 AND status = 'published' AND ends_at > $2`,
+      [group.id, at],
+    );
+  }
+  await client.query(
+    "DELETE FROM group_memberships WHERE group_id = $1 AND user_id = $2",
+    [group.id, userId],
+  );
+  await client.query(
+    `UPDATE community_groups
+        SET member_count = GREATEST(0, member_count - 1),
+            status = CASE WHEN $2 THEN 'closed' ELSE status END,
+            last_event_end = CASE WHEN $2 THEN NULL ELSE last_event_end END,
+            delete_after = CASE WHEN $2 THEN $3 ELSE delete_after END,
+            updated_at = $4
+      WHERE id = $1`,
+    [group.id, last, expiry(group.lastActivityAt), at],
+  );
+}
+
+// Leaves every active group, as if the member pressed Leave in each one.
+// Used when an account is deleted so member counts stay right.
+async function leaveAllGroupsTx(client, userId, at) {
+  const { rows } = await client.query(
+    `SELECT g.id, g.member_count, g.last_activity_at
+       FROM group_memberships m
+       JOIN community_groups g ON g.id = m.group_id
+      WHERE m.user_id = $1 AND m.status = 'active' AND g.status = 'active'
+      ORDER BY g.id
+      FOR UPDATE OF g`,
+    [userId],
+  );
+  for (const row of rows) {
+    await leaveGroupTx(
+      client,
+      {
+        id: row.id,
+        memberCount: Number(row.member_count),
+        lastActivityAt: row.last_activity_at,
+      },
+      userId,
+      at,
+    );
+  }
+  return rows.length;
+}
+
 async function identity(client, req, message = "Your profile is not ready.") {
   if (!validUuid(req.userId) || typeof req.account?.uid !== "string")
     fail(401, "Please sign in.");
@@ -677,32 +731,15 @@ function installGroupRoutes(app, db, { clock = Date.now } = {}) {
         const user = await identity(client, req);
         const value = await access(client, req.params.id, user.id, true);
         if (!value.member) return;
-        const last = value.group.memberCount === 1;
-        if (last) {
-          await client.query(
-            `UPDATE group_events SET status = 'cancelled', updated_at = $2
-              WHERE group_id = $1 AND status = 'published' AND ends_at > $2`,
-            [value.id, new Date(clock())],
-          );
-        }
-        await client.query(
-          "DELETE FROM group_memberships WHERE group_id = $1 AND user_id = $2",
-          [value.id, user.id],
-        );
-        await client.query(
-          `UPDATE community_groups
-              SET member_count = GREATEST(0, member_count - 1),
-                  status = CASE WHEN $2 THEN 'closed' ELSE status END,
-                  last_event_end = CASE WHEN $2 THEN NULL ELSE last_event_end END,
-                  delete_after = CASE WHEN $2 THEN $3 ELSE delete_after END,
-                  updated_at = $4
-            WHERE id = $1`,
-          [
-            value.id,
-            last,
-            expiry(value.group.lastActivityAt),
-            new Date(clock()),
-          ],
+        await leaveGroupTx(
+          client,
+          {
+            id: value.id,
+            memberCount: value.group.memberCount,
+            lastActivityAt: value.group.lastActivityAt,
+          },
+          user.id,
+          new Date(clock()),
         );
       });
       res.json({ left: true });
@@ -1417,4 +1454,5 @@ module.exports = {
   startGroupCleanup,
   sweepInactiveGroups,
   purgeGroup,
+  leaveAllGroupsTx,
 };

@@ -10,6 +10,7 @@ import {
 import {
   createUserWithEmailAndPassword,
   onAuthStateChanged,
+  sendPasswordResetEmail,
   signInWithEmailAndPassword,
   signOut as firebaseSignOut,
   updateProfile as updateFirebaseProfile,
@@ -82,6 +83,11 @@ type AuthContextValue = {
     fields: RegistrationFields,
   ) => Promise<AuthResult>;
   signOut: () => Promise<AuthResult>;
+  // Emails a Firebase password-reset link. Succeeds whether or not the email
+  // has an account, so the form cannot be used to discover members.
+  resetPassword: (email: string) => Promise<AuthResult>;
+  // Permanently deletes the account and its data, then signs out.
+  deleteAccount: () => Promise<AuthResult>;
   updateProfile: (
     input: ProfileInput,
   ) => Promise<AuthResult>;
@@ -444,6 +450,40 @@ export function AuthProvider({
     });
   }
 
+  async function resetPassword(email: string): Promise<AuthResult> {
+    const address = normalizeEmail(email);
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address)) {
+      return { ok: false, message: "Enter your email address first." };
+    }
+    try {
+      await sendPasswordResetEmail(auth, address);
+      return { ok: true };
+    } catch (error) {
+      if ((error as { code?: string })?.code === "auth/user-not-found") {
+        return { ok: true };
+      }
+      return { ok: false, message: errorMessage(error) };
+    }
+  }
+
+  async function deleteAccount(): Promise<AuthResult> {
+    return runAction(async () => {
+      const account = auth.currentUser;
+      if (!account) throw new Error("Please sign in again.");
+      await apiRequest<{ deleted: boolean }>(
+        account,
+        "POST",
+        { confirm: "DELETE" },
+        "/api/me/delete",
+        { timeoutMs: 30000 },
+      );
+      unfinishedProfiles.delete(account.uid);
+      // The login no longer exists on the server; clear it on this device.
+      await firebaseSignOut(auth);
+      return null;
+    });
+  }
+
   async function updateProfile(
     input: ProfileInput,
   ): Promise<AuthResult> {
@@ -514,6 +554,8 @@ export function AuthProvider({
         signIn,
         register,
         signOut,
+        resetPassword,
+        deleteAccount,
         updateProfile,
         changeProfilePhoto,
         refreshProfile,

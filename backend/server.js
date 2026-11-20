@@ -22,6 +22,7 @@ const {
 } = require("./postgres");
 const { migrationVersions } = require("./migrate");
 const { createAuthSession } = require("./auth-session");
+const { installAccountRoutes } = require("./account-routes");
 const cityIndex = new Map(cities.map((city) => [city.id, city]));
 const { installPlaceRoutes } = require("./places-routes");
 const {
@@ -369,6 +370,10 @@ function createApp({ db, firebaseAuth }) {
   });
 
   installProfileRoutes(app, db, { toOwner: ownerProfile });
+  installAccountRoutes(app, db, {
+    firebaseAuth,
+    onDeleted: (uid) => session.forget(uid),
+  });
   installPlaceRoutes(app);
   installNewsRoutes(app);
   installInterestNewsRoutes(app, db);

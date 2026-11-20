@@ -21,6 +21,7 @@ import { gutter, radius, type } from "../constants/theme";
 import { useAuth } from "../context/auth-context";
 import { useAppTheme } from "../context/theme-context";
 import {
+  normalizeEmail,
   validateAuthForm,
   type AuthErrors,
   type AuthFields,
@@ -120,7 +121,7 @@ export function AuthScreen({
   onSuccess,
 }: AuthScreenProps) {
   const { colors } = useAppTheme();
-  const { signIn, register } = useAuth();
+  const { signIn, register, resetPassword } = useAuth();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [fields, setFields] = useState<AuthFields>({
     fullName: "",
@@ -130,6 +131,8 @@ export function AuthScreen({
   });
   const [errors, setErrors] = useState<AuthErrors>({});
   const [formError, setFormError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [sendingReset, setSendingReset] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [location, setLocation] = useState<AreaSelection | null>(null);
   const [locationError, setLocationError] = useState("");
@@ -145,6 +148,7 @@ export function AuthScreen({
   useEffect(() => {
     setErrors({});
     setFormError("");
+    setNotice("");
     setLocationError("");
     setFields((current) => ({ ...current, password: "", confirmPassword: "" }));
   }, [mode]);
@@ -153,6 +157,24 @@ export function AuthScreen({
     setFields((current) => ({ ...current, [key]: value }));
     setErrors((current) => ({ ...current, [key]: undefined }));
     setFormError("");
+    setNotice("");
+  }
+
+  async function sendReset() {
+    if (sendingReset) return;
+    setFormError("");
+    setNotice("");
+    setSendingReset(true);
+    const result = await resetPassword(fields.email);
+    setSendingReset(false);
+    if (result.ok) {
+      setNotice(
+        `If ${normalizeEmail(fields.email)} has an account, a link to reset your password is on its way. Check your inbox and spam folder.`,
+      );
+    } else {
+      setFormError(result.message);
+      emailInput.current?.focus();
+    }
   }
 
   async function submit() {
@@ -310,6 +332,19 @@ export function AuthScreen({
               {isRegister && !errors.password && (
                 <Text style={styles.fieldHint}>Use at least 8 characters.</Text>
               )}
+              {!isRegister && (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityHint="Emails you a link to choose a new password"
+                  disabled={submitting || sendingReset}
+                  onPress={() => void sendReset()}
+                  style={styles.forgotButton}
+                >
+                  <Text style={styles.forgotText}>
+                    {sendingReset ? "Sending link…" : "Forgot password?"}
+                  </Text>
+                </Pressable>
+              )}
             </View>
 
             {isRegister && (
@@ -344,6 +379,14 @@ export function AuthScreen({
                   setFormError("");
                 }}
               />
+            )}
+
+            {notice !== "" && (
+              <View style={styles.noticeBox}>
+                <Text accessibilityRole="alert" style={styles.noticeText}>
+                  {notice}
+                </Text>
+              </View>
             )}
 
             {formError !== "" && (
@@ -488,6 +531,16 @@ function createStyles(colors: AppColors) {
       fontSize: 15,
       lineHeight: 22,
       color: colors.danger,
+    },
+    forgotButton: { alignSelf: "flex-end", minHeight: 40, justifyContent: "center", marginTop: 4 },
+    forgotText: { ...type.label, color: colors.accent },
+    noticeText: { ...type.body, fontSize: 15, lineHeight: 22, color: colors.text },
+    noticeBox: {
+      padding: 14,
+      borderRadius: radius.md,
+      borderWidth: 1,
+      borderColor: colors.accent,
+      backgroundColor: colors.accentSoft,
     },
     errorBox: {
       padding: 14,
